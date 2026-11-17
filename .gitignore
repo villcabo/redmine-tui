@@ -1,0 +1,5 @@
+/redmine-tui
+/dist/
+*.test
+*.out
+coverage.*
