@@ -121,7 +121,14 @@ func (c *Client) ListIssues(ctx context.Context, q ListQuery, offset int) (Issue
 		status = StatusOpen
 	}
 	query.Set("status_id", status)
-	query.Set("sort", "updated_on:desc")
+	if q.WithDueDate {
+		query.Set("due_date", "*")
+	}
+	sort := q.Sort
+	if sort == "" {
+		sort = "updated_on:desc"
+	}
+	query.Set("sort", sort)
 	query.Set("limit", strconv.Itoa(pageSize))
 	query.Set("offset", strconv.Itoa(offset))
 

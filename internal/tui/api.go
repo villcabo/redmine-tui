@@ -123,7 +123,10 @@ type (
 		denied bool
 		cache  []redmine.Member
 	}
-	openedMsg struct{ err error }
+	openedMsg struct {
+		id  int
+		err error
+	}
 )
 
 func fetchStatusesCmd(a API) tea.Cmd {

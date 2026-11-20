@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -50,6 +51,9 @@ type listModel struct {
 
 	showPreview bool
 	preview     previewCache
+
+	// loadedAt is when the first page last arrived.
+	loadedAt time.Time
 }
 
 // listRow is one line of the table: a loaded issue, or a descendant shown under an
@@ -419,6 +423,8 @@ func (l *listModel) titleLine(e env) string {
 		left += e.st.dim.Render(" · " + e.t("list.updating"))
 	case l.loadingMore:
 		left += e.st.dim.Render(" · " + e.t("list.loading_more"))
+	case !l.loadedAt.IsZero():
+		left += e.st.dim.Render(" · " + e.t("list.loaded_at", relativeTime(e.tr, e.now, l.loadedAt)))
 	}
 	right := l.statusSummary(e, e.w-lipgloss.Width(left)-3)
 	if right == "" {
@@ -576,6 +582,8 @@ func (l *listModel) table(e env, frame string) string {
 		body = lipgloss.Place(inner, rows+1, lipgloss.Center, lipgloss.Center, frame+" "+e.st.dim.Render(e.t("loading.issues")))
 	case l.err != nil:
 		body = lipgloss.Place(inner, rows+1, lipgloss.Center, lipgloss.Center, e.st.danger.Render(truncate(e.t("error.load", friendlyError(e, l.err)), inner))+"\n"+e.st.dim.Render(e.t("error.retry")))
+	case len(l.visible) == 0 && strings.TrimSpace(l.query) != "":
+		body = lipgloss.Place(inner, rows+1, lipgloss.Center, lipgloss.Center, e.st.dim.Render(truncate(e.t("list.no_match", l.query), inner)))
 	case len(l.visible) == 0:
 		body = lipgloss.Place(inner, rows+1, lipgloss.Center, lipgloss.Center, e.st.dim.Render(e.t("list.empty")))
 	default:
@@ -727,6 +735,9 @@ func (l *listModel) previewBox(e env) string {
 		field(e.t("detail.author"), is.Author.Name),
 		field(e.t("col.updated"), e.tr.DateTime(is.UpdatedOn)),
 		truncate(st.dim.Render(padRight(e.t("detail.due"), 12))+dueStyle(e, *is).Render(e.tr.Date(is.DueDate)), inner),
+	}
+	if is.FixedVersion != nil {
+		lines = append(lines, field(e.t("detail.version"), is.FixedVersion.Name))
 	}
 	if kids := l.kids[is.ID]; len(kids) > 0 {
 		lines = append(lines, field(e.t("preview.children"), e.t("preview.children_value", closedCount(e, kids), len(kids))))

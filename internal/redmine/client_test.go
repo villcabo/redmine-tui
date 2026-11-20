@@ -89,6 +89,9 @@ func TestListIssuesQuery(t *testing.T) {
 		{name: "assigned to another user", query: ListQuery{Assigned: "31"}, want: map[string]string{"assigned_to_id": "31"}},
 		{name: "every filter together", query: ListQuery{Assigned: "31", Author: "me", Watcher: "me", ProjectID: 3, TrackerID: 2, Status: StatusOpen},
 			want: map[string]string{"assigned_to_id": "31", "author_id": "me", "watcher_id": "me", "project_id": "3", "tracker_id": "2", "status_id": "open"}},
+		{name: "by due date, dated only", query: ListQuery{Assigned: "me", Sort: "due_date,priority:desc", WithDueDate: true},
+			want: map[string]string{"sort": "due_date,priority:desc", "due_date": "*"}},
+		{name: "default order sends no due date filter", query: ListQuery{Assigned: "me"}, want: map[string]string{"sort": "updated_on:desc"}, not: []string{"due_date"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -110,8 +113,11 @@ func TestListIssuesQuery(t *testing.T) {
 					t.Errorf("%s must not be sent (query %v)", k, got.query)
 				}
 			}
-			if got.query.Get("sort") != "updated_on:desc" || got.query.Get("limit") != "100" {
-				t.Errorf("sort/limit wrong: %v", got.query)
+			if _, custom := tt.want["sort"]; !custom && got.query.Get("sort") != "updated_on:desc" {
+				t.Errorf("default sort wrong: %v", got.query)
+			}
+			if got.query.Get("limit") != "100" {
+				t.Errorf("limit wrong: %v", got.query)
 			}
 			if got.apiKey != fakeKey {
 				t.Error("the key header was not sent")
