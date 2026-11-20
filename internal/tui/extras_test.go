@@ -56,12 +56,19 @@ func TestListOrderCycles(t *testing.T) {
 	if q.Sort != "due_date,priority:desc" || !q.WithDueDate {
 		t.Fatalf("first O should sort by due date over dated issues, query = %+v", q)
 	}
-	containsAll(t, ansi.Strip(m.render()), "Order: due date (dated only)")
+	out := ansi.Strip(m.render())
+	containsAll(t, out, "Order: due date (dated only)", "11/20/2026")
+	if header := strings.Split(out, "\n")[3]; !strings.Contains(header, "Due") {
+		t.Errorf("ordering by due date shows the Due column, header %q", header)
+	}
 
 	press(t, m, "O", "O", "O")
 	q = api.queries[len(api.queries)-1]
 	if q.Sort != "" || q.WithDueDate {
 		t.Fatalf("O should cycle back to the default order, query = %+v", q)
+	}
+	if header := strings.Split(ansi.Strip(m.render()), "\n")[3]; strings.Contains(header, "Due") {
+		t.Errorf("the Due column belongs to the due-date order only, header %q", header)
 	}
 	if strings.Contains(ansi.Strip(m.render()), "Order:") {
 		t.Error("the default order is not worth a mention in the filter line")

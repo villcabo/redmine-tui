@@ -630,3 +630,19 @@ func TestOnlyIssueWritesAreAllowed(t *testing.T) {
 		})
 	}
 }
+
+func TestGetUser(t *testing.T) {
+	c, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"user":{"id":72,"login":"dramos","firstname":"Diego","lastname":"Ramos"}}`)
+	})
+	u, err := c.GetUser(context.Background(), 72)
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if u.ID != 72 || u.Name != "Diego Ramos" {
+		t.Errorf("user = %+v", u)
+	}
+	if got := rec.all()[0]; got.method != http.MethodGet || got.path != "/users/72.json" {
+		t.Errorf("request = %s %s", got.method, got.path)
+	}
+}

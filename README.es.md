@@ -146,7 +146,7 @@ Dentro de la aplicación, `?` muestra la lista de teclas.
 | `a` | alternar abiertos / todos los estados |
 | `/` | filtro rápido de texto sobre las filas cargadas (`esc` lo quita) |
 | `p` | alternar el panel de vista previa (se muestra desde 140 columnas) |
-| `O` | cambiar el orden: actualizado (por defecto), vencimiento, prioridad, creado. Vencimiento lista solo los issues que tienen fecha, porque Redmine pone primero los que no tienen |
+| `O` | cambiar el orden: actualizado (por defecto), vencimiento, prioridad, creado. Vencimiento lista solo los issues que tienen fecha, porque Redmine pone primero los que no tienen, y agrega una columna Vence |
 | `S` `c` `n` `D` `A` | estado, cierre rápido, nota, porcentaje hecho y asignar sobre la fila elegida, sin abrirla. Primero se pide el issue, por los estados que permite su flujo |
 | `y` | copiar: enlace, `#id`, título, `#id título` |
 | `→` `l` / `←` `h` / `space` | desplegar / plegar las hijas de la fila: `+3` marca un issue con 3 hijas, `−3` uno desplegado |
@@ -256,6 +256,10 @@ Comportamiento que depende de la versión y de los permisos:
   lista para las marcas `+n`, un `parent_id=~id` por fila desplegada y, en el detalle, uno para el
   árbol y un `issue_id=…` para las relaciones. Las hijas que la key no puede ver no se cuentan.
 - La búsqueda se limita a los primeros 500 resultados.
+- **Los campos personalizados de usuario** llegan de Redmine como un id. El detalle muestra el nombre
+  solo si la key puede leer las definiciones de campos (`GET /custom_fields.json`, solo para
+  administradores) y el usuario (`GET /users/:id.json`); si no, muestra el id. Los campos de fecha
+  usan el formato de la interfaz.
 
 ## Preguntas frecuentes y problemas comunes
 

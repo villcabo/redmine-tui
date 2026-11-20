@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,8 +48,12 @@ type env struct {
 	defaultStatus int
 	statusColors  map[string]string
 	priorities    []redmine.Priority
-	now           time.Time
-	w, h          int
+	// fieldFormats maps custom field ids to their format ("user", "date", …) when the key
+	// may read the definitions; userNames resolves the ids of user custom fields.
+	fieldFormats map[int]string
+	userNames    map[int]string
+	now          time.Time
+	w, h         int
 }
 
 func (e env) t(key string, args ...any) string { return e.tr.T(key, args...) }
@@ -87,9 +92,12 @@ type Model struct {
 	usersDenied bool
 	usersCache  []redmine.Member
 
-	customDefs      []redmine.CustomFieldDef
-	customDefsOK    bool
-	customDefsTried bool
+	customDefs        []redmine.CustomFieldDef
+	customDefsOK      bool
+	customDefsTried   bool
+	customDefsPending bool
+	fieldFormats      map[int]string
+	userNames         map[int]string
 
 	list listModel
 	// issueCache keeps the last full copy of each opened issue, so reopening it paints at
@@ -129,6 +137,7 @@ func New(api API, opts Options) *Model {
 		statuses:   map[int]redmine.Status{},
 		list:       newListModel(),
 		issueCache: map[int]*redmine.Issue{},
+		userNames:  map[int]string{},
 	}
 	m.st = newStyles(m.dark, opts.NoColor)
 	if opts.StartID > 0 {
@@ -147,6 +156,7 @@ func (m *Model) env() env {
 		st: m.st, tr: m.tr, dark: m.dark, noColor: m.noColor,
 		statuses: m.statuses, statusList: m.statusList, defaultStatus: m.defaultStatus,
 		statusColors: m.opts.StatusColors, priorities: m.priorities, now: m.now(),
+		fieldFormats: m.fieldFormats, userNames: m.userNames,
 		w: max(m.w, minWidth), h: max(m.h, minHeight),
 	}
 }
@@ -236,6 +246,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case customDefsMsg:
+		m.customDefsPending = false
+		m.setCustomDefs(msg.defs, msg.err)
+		var cmds []tea.Cmd
+		for _, d := range m.stack {
+			if d.issue != nil {
+				cmds = append(cmds, m.resolveCustomValues(d.issue))
+			}
+		}
+		m.refreshAll()
+		return m, tea.Batch(cmds...)
+
+	case userNamesMsg:
+		for id, name := range msg.names {
+			m.userNames[id] = name
+		}
+		m.refreshAll()
+		return m, nil
+
 	case descendantsMsg:
 		for _, d := range m.stack {
 			if d.uid == msg.uid {
@@ -265,6 +294,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				d.apply(msg, m.env())
 				if msg.err == nil && msg.issue != nil {
 					m.issueCache[d.id] = msg.issue
+					cmds = append(cmds, m.resolveCustomValues(msg.issue))
 					cmds = append(cmds, d.followUps(m.api)...)
 				}
 			}
@@ -955,4 +985,58 @@ func padRight(s string, width int) string {
 		return s + strings.Repeat(" ", gap)
 	}
 	return s
+}
+
+// setCustomDefs stores the custom field definitions and the format of each field.
+func (m *Model) setCustomDefs(defs []redmine.CustomFieldDef, err error) {
+	m.customDefsTried = true
+	m.customDefs, m.customDefsOK = defs, err == nil
+	if err != nil {
+		return
+	}
+	m.fieldFormats = make(map[int]string, len(defs))
+	for _, d := range defs {
+		m.fieldFormats[d.ID] = d.FieldFormat
+	}
+}
+
+// resolveCustomValues fetches what the issue's custom values need to be readable: the
+// field definitions once, then the names of the users that user fields point at.
+func (m *Model) resolveCustomValues(is *redmine.Issue) tea.Cmd {
+	if !m.customDefsTried {
+		if m.customDefsPending {
+			return nil
+		}
+		m.customDefsPending = true
+		return fetchCustomDefsCmd(m.api)
+	}
+	var ids []int
+	want := func(raw string) {
+		for _, part := range strings.Split(raw, ", ") {
+			id, err := strconv.Atoi(strings.TrimSpace(part))
+			if _, known := m.userNames[id]; err == nil && id > 0 && !known && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	for _, cf := range is.CustomFields {
+		if m.fieldFormats[cf.ID] == "user" {
+			want(cf.Text())
+		}
+	}
+	for _, j := range is.Journals {
+		for _, det := range j.Details {
+			if id, err := strconv.Atoi(det.Name); err == nil && det.Property == "cf" && m.fieldFormats[id] == "user" {
+				want(valueOr(det.OldValue, ""))
+				want(valueOr(det.NewValue, ""))
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		m.userNames[id] = "" // asked once; a failure keeps showing the id
+	}
+	return fetchUserNamesCmd(m.api, ids)
 }

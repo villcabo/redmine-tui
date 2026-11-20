@@ -24,6 +24,10 @@ All notable changes to this project are documented here. The format follows
   them; the version also in the preview.
 - The list header says when it was loaded, and a quick filter with no match says so
   and how to clear it.
+- The due-date order adds a Due column, colored like the preview.
+- User custom fields show the user's name instead of the id, in the detail and its
+  history, when the key may read the field definitions; date custom fields use the
+  interface date format.
 
 ### Changed
 

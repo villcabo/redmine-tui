@@ -501,6 +501,7 @@ const (
 	colSubject
 	colAssignee
 	colProject
+	colDue
 	colUpdated
 )
 
@@ -517,7 +518,7 @@ func (t tableLayout) has(c column) bool { _, ok := t.widths[c]; return ok }
 // layout sizes every column from the visible rows and drops columns until the subject has room.
 func (l *listModel) layout(e env, inner int) tableLayout {
 	w := map[column]int{
-		colID: 3, colStatus: 6, colPriority: 8, colTracker: 7, colAssignee: 8, colProject: 7, colUpdated: 6,
+		colID: 3, colStatus: 6, colPriority: 8, colTracker: 7, colAssignee: 8, colProject: 7, colDue: 5, colUpdated: 6,
 	}
 	for _, r := range l.visible {
 		is := *r.issue
@@ -530,8 +531,12 @@ func (l *listModel) layout(e env, inner int) tableLayout {
 		}
 		w[colProject] = max(w[colProject], min(lipgloss.Width(projectLabel(is.Project.Name, projectWidth)), projectWidth))
 		w[colUpdated] = max(w[colUpdated], min(lipgloss.Width(relativeTime(e.tr, e.now, is.UpdatedOn)), 12))
+		w[colDue] = max(w[colDue], lipgloss.Width(e.tr.Date(is.DueDate)))
 	}
 	order := []column{colID, colStatus, colPriority, colTracker, colSubject, colAssignee, colProject, colUpdated}
+	if l.f.order == orderDue {
+		order = slices.Insert(order, len(order)-1, colDue)
+	}
 	if l.f.assigned.id == "me" && !l.hasChildRows() {
 		order = slices.DeleteFunc(order, func(c column) bool { return c == colAssignee })
 	}
@@ -613,7 +618,7 @@ func (l *listModel) headerRow(e env, lay tableLayout, inner int) string {
 	labels := map[column]string{
 		colID: e.t("col.id"), colStatus: e.t("col.status"), colPriority: e.t("col.priority"),
 		colTracker: e.t("col.tracker"), colSubject: e.t("col.subject"), colAssignee: e.t("col.assignee"),
-		colProject: e.t("col.project"), colUpdated: e.t("col.updated"),
+		colProject: e.t("col.project"), colDue: e.t("col.due"), colUpdated: e.t("col.updated"),
 	}
 	parts := []string{"  "}
 	for _, c := range lay.shown {
@@ -676,6 +681,8 @@ func (l *listModel) renderRow(e env, lay tableLayout, r listRow, selected bool, 
 			cell = assigneeCell(e, p, is, w)
 		case colProject:
 			cell = p.text(e.st.dim, projectLabel(is.Project.Name, projectWidth), w)
+		case colDue:
+			cell = p.text(dueStyle(e, is), e.tr.Date(is.DueDate), w)
 		case colUpdated:
 			cell = p.text(e.st.dim, relativeTime(e.tr, e.now, is.UpdatedOn), w)
 		}

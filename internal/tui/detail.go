@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -321,7 +322,7 @@ func (d *detailModel) renderOverview(e env) string {
 	}
 	var clasif []string
 	for _, cf := range is.CustomFields {
-		v := cf.Text()
+		v := customValue(e, cf.ID, cf.Text())
 		if v == "" {
 			continue
 		}
@@ -370,6 +371,7 @@ func pad(lines []string, n int) []string {
 
 func (d *detailModel) renderHistory(e env) string {
 	res := newResolver(e.tr, d.issue, e.statuses)
+	res.value = func(fieldID int, raw string) string { return customValue(e, fieldID, raw) }
 	var entries []string
 	for _, j := range d.issue.Journals {
 		var lines []string
@@ -493,4 +495,24 @@ func hoursText(e env, is *redmine.Issue) string {
 
 func formatHours(h float64) string {
 	return strings.TrimSuffix(strings.TrimRight(fmt.Sprintf("%.2f", h), "0"), ".")
+}
+
+// customValue renders a custom field value for reading: user ids become names and dates
+// take the interface format. Without the field definitions the value stays as stored.
+func customValue(e env, fieldID int, raw string) string {
+	switch e.fieldFormats[fieldID] {
+	case "user":
+		parts := strings.Split(raw, ", ")
+		for i, p := range parts {
+			if id, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && e.userNames[id] != "" {
+				parts[i] = e.userNames[id]
+			}
+		}
+		return strings.Join(parts, ", ")
+	case "date":
+		if raw != "" {
+			return e.tr.Date(&raw)
+		}
+	}
+	return raw
 }

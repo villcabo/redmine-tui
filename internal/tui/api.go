@@ -32,6 +32,7 @@ type API interface {
 	ListMembers(ctx context.Context, projectID int) ([]redmine.Member, error)
 	ListUsers(ctx context.Context, name string) ([]redmine.Member, error)
 	CurrentUser(ctx context.Context) (redmine.Member, error)
+	GetUser(ctx context.Context, id int) (redmine.Member, error)
 	ListCustomFields(ctx context.Context) ([]redmine.CustomFieldDef, error)
 	UpdateIssue(ctx context.Context, id int, u redmine.IssueUpdate) error
 	CreateIssue(ctx context.Context, n redmine.NewIssue) (*redmine.Issue, error)
@@ -89,7 +90,13 @@ type (
 		issues []redmine.Issue
 		err    error
 	}
-	searchMsg struct {
+	customDefsMsg struct {
+		defs []redmine.CustomFieldDef
+		err  error
+	}
+	// userNamesMsg maps user ids to names; a user that could not be read maps to "".
+	userNamesMsg struct{ names map[int]string }
+	searchMsg    struct {
 		gen     int
 		results []redmine.SearchResult
 		err     error
@@ -216,5 +223,31 @@ func fetchRelatedCmd(a API, uid int, ids []int) tea.Cmd {
 		defer cancel()
 		issues, err := a.ListIssuesByID(ctx, ids)
 		return relatedMsg{uid: uid, issues: issues, err: err}
+	}
+}
+
+func fetchCustomDefsCmd(a API) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		defs, err := a.ListCustomFields(ctx)
+		return customDefsMsg{defs: defs, err: err}
+	}
+}
+
+func fetchUserNamesCmd(a API, ids []int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		names := make(map[int]string, len(ids))
+		for _, id := range ids {
+			u, err := a.GetUser(ctx, id)
+			if err != nil {
+				names[id] = ""
+				continue
+			}
+			names[id] = u.Name
+		}
+		return userNamesMsg{names: names}
 	}
 }

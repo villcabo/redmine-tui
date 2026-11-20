@@ -40,6 +40,8 @@ type fakeAPI struct {
 	createCalls int
 	// tree answers the children, descendants and by-id lookups: each one returns the
 	// issues of tree that match by parent, by ancestry or by id.
+	userNames    map[int]string
+	customDefs   []redmine.CustomFieldDef
 	tree         []redmine.Issue
 	subtreeCalls []int
 }
@@ -114,10 +116,19 @@ func (f *fakeAPI) ListUsers(_ context.Context, name string) ([]redmine.Member, e
 	}
 	return nil, &redmine.APIError{Status: 403}
 }
+func (f *fakeAPI) GetUser(_ context.Context, id int) (redmine.Member, error) {
+	if name, ok := f.userNames[id]; ok {
+		return redmine.Member{ID: id, Name: name}, nil
+	}
+	return redmine.Member{}, &redmine.APIError{Status: 404}
+}
 func (f *fakeAPI) CurrentUser(context.Context) (redmine.Member, error) {
 	return redmine.Member{ID: 5, Name: "Jane Doe"}, nil
 }
 func (f *fakeAPI) ListCustomFields(context.Context) ([]redmine.CustomFieldDef, error) {
+	if f.customDefs != nil {
+		return f.customDefs, nil
+	}
 	return nil, &redmine.APIError{Status: 403}
 }
 func (f *fakeAPI) UpdateIssue(context.Context, int, redmine.IssueUpdate) error {
