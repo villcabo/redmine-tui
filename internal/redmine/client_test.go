@@ -120,6 +120,54 @@ func TestListIssuesQuery(t *testing.T) {
 	}
 }
 
+func TestListIssueSets(t *testing.T) {
+	tests := []struct {
+		name  string
+		call  func(c *Client) ([]Issue, error)
+		param string
+		value string
+	}{
+		{name: "children of several parents", call: func(c *Client) ([]Issue, error) {
+			return c.ListChildren(context.Background(), []int{15589, 15807})
+		}, param: "parent_id", value: "15589,15807"},
+		{name: "descendants at any depth", call: func(c *Client) ([]Issue, error) {
+			return c.ListDescendants(context.Background(), 15589)
+		}, param: "parent_id", value: "~15589"},
+		{name: "issues by id", call: func(c *Client) ([]Issue, error) {
+			return c.ListIssuesByID(context.Background(), []int{9, 0, 12})
+		}, param: "issue_id", value: "9,12"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintf(w, listPage, 1, 0) })
+			issues, err := tt.call(c)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			if len(issues) != 1 {
+				t.Fatalf("issues = %d, want 1", len(issues))
+			}
+			got := rec.all()[0]
+			if got.path != "/issues.json" || got.query.Get(tt.param) != tt.value || got.query.Get("status_id") != "*" {
+				t.Errorf("request = %s %v", got.path, got.query)
+			}
+		})
+	}
+}
+
+func TestListIssueSetsSkipEmptyInput(t *testing.T) {
+	c, rec := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintf(w, listPage, 1, 0) })
+	if got, err := c.ListChildren(context.Background(), nil); err != nil || got != nil {
+		t.Fatalf("ListChildren(nil) = %v, %v", got, err)
+	}
+	if got, err := c.ListIssuesByID(context.Background(), []int{0}); err != nil || got != nil {
+		t.Fatalf("ListIssuesByID([0]) = %v, %v", got, err)
+	}
+	if n := len(rec.all()); n != 0 {
+		t.Fatalf("an empty set must not reach Redmine, got %d requests", n)
+	}
+}
+
 func TestListIssuesPagesOnDemand(t *testing.T) {
 	c, rec := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		offset := 0

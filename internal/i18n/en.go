@@ -35,6 +35,9 @@ var catalogEN = map[string]string{
 	"loading.members":        "Loading project members",
 	"loading.project":        "Loading project",
 	"preview.title":          "Preview",
+	"preview.done":           "Done",
+	"preview.children":       "Children",
+	"preview.children_value": "%d of %d closed",
 
 	// views and filters
 	"view.title":            "View",
@@ -87,6 +90,8 @@ var catalogEN = map[string]string{
 	"detail.no_description": "No description",
 	"history.empty":         "No activity",
 	"children.empty":        "No child issues",
+	"children.summary":      "%d direct children · %d in the tree · %d closed",
+	"children.tree_error":   "Could not load the children tree: %s",
 	"relations.empty":       "No relations",
 	"rel.relates":           "related to",
 	"rel.duplicates":        "duplicates",
@@ -170,6 +175,7 @@ var catalogEN = map[string]string{
 	"error.load":            "Could not load: %s",
 	"error.retry":           "Press r to retry.",
 	"error.browser":         "Could not open the browser: %s",
+	"error.children":        "Could not load the children: %s",
 	"error.401":             "Redmine did not accept the API key (401). Check the key file.",
 	"error.403":             "No permission for this (403).",
 	"error.404":             "The resource does not exist or is not accessible (404).",
@@ -200,7 +206,7 @@ var catalogEN = map[string]string{
 
 	// help
 	"help.title":             "Help",
-	"help.list":              "↑↓ move · enter open · g go to # · s search · v views · f filters · / quick filter · y copy · N new · ? help · q quit",
+	"help.list":              "↑↓ move · enter open · g go to # · s search · v views · f filters · / quick filter · y copy · → children · N new · ? help · q quit",
 	"help.detail":            "←→ tabs · ↑↓ scroll · S status · c close · n note · D done · A assign · y copy · o browser · esc back · ? help",
 	"help.search":            "↑↓ move · enter open · y copy · o browser · r repeat · esc back · s new search",
 	"help.form":              "tab/↑↓ field · enter choose or edit · ctrl+s create · esc cancel",
@@ -225,6 +231,7 @@ var catalogEN = map[string]string{
 	"help.row.all":           "toggle open / all statuses",
 	"help.row.preview":       "toggle the preview panel (140+ columns)",
 	"help.row.copy":          "copy link, number or title",
+	"help.row.expand":        "expand / collapse the row's children (+n has n children)",
 	"help.row.tabs":          "switch tab in the detail",
 	"help.row.browser":       "open in the browser",
 	"help.row.reload":        "reload",

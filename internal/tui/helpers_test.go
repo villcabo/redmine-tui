@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -37,6 +38,10 @@ type fakeAPI struct {
 	members     map[int][]redmine.Member
 	updateCalls int
 	createCalls int
+	// tree answers the children, descendants and by-id lookups: each one returns the
+	// issues of tree that match by parent, by ancestry or by id.
+	tree         []redmine.Issue
+	subtreeCalls []int
 }
 
 func (f *fakeAPI) ListIssues(_ context.Context, q redmine.ListQuery, offset int) (redmine.IssuePage, error) {
@@ -50,7 +55,42 @@ func (f *fakeAPI) ListIssues(_ context.Context, q redmine.ListQuery, offset int)
 	}
 	return redmine.IssuePage{Issues: f.issues, Total: total}, nil
 }
-func (f *fakeAPI) GetIssue(context.Context, int) (*redmine.Issue, error)  { return f.issue, nil }
+func (f *fakeAPI) GetIssue(context.Context, int) (*redmine.Issue, error) { return f.issue, nil }
+func (f *fakeAPI) ListChildren(_ context.Context, parents []int) ([]redmine.Issue, error) {
+	var out []redmine.Issue
+	for _, is := range f.tree {
+		if is.Parent != nil && slices.Contains(parents, is.Parent.ID) {
+			out = append(out, is)
+		}
+	}
+	return out, nil
+}
+func (f *fakeAPI) ListDescendants(_ context.Context, root int) ([]redmine.Issue, error) {
+	f.mu.Lock()
+	f.subtreeCalls = append(f.subtreeCalls, root)
+	f.mu.Unlock()
+	below := map[int]bool{root: true}
+	var out []redmine.Issue
+	for grew := true; grew; {
+		grew = false
+		for _, is := range f.tree {
+			if is.Parent != nil && below[is.Parent.ID] && !below[is.ID] {
+				below[is.ID], grew = true, true
+				out = append(out, is)
+			}
+		}
+	}
+	return out, nil
+}
+func (f *fakeAPI) ListIssuesByID(_ context.Context, ids []int) ([]redmine.Issue, error) {
+	var out []redmine.Issue
+	for _, is := range f.tree {
+		if slices.Contains(ids, is.ID) {
+			out = append(out, is)
+		}
+	}
+	return out, nil
+}
 func (f *fakeAPI) ListStatuses(context.Context) ([]redmine.Status, error) { return testStatuses(), nil }
 func (f *fakeAPI) ListPriorities(context.Context) ([]redmine.Priority, error) {
 	return testPriorities(), nil
@@ -153,6 +193,12 @@ func key(name string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyDown}
 	case "up":
 		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "space":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	case "backspace":
 		return tea.KeyPressMsg{Code: tea.KeyBackspace}
 	case "ctrl+s":

@@ -147,6 +147,7 @@ Dentro de la aplicación, `?` muestra la lista de teclas.
 | `/` | filtro rápido de texto sobre las filas cargadas (`esc` lo quita) |
 | `p` | alternar el panel de vista previa (se muestra desde 140 columnas) |
 | `y` | copiar: enlace, `#id`, título, `#id título` |
+| `→` `l` / `←` `h` / `space` | desplegar / plegar las hijas de la fila: `+3` marca un issue con 3 hijas, `−3` uno desplegado |
 | `N` | issue nuevo |
 | `o` | abrir en el navegador |
 | `r` | recargar |
@@ -155,7 +156,14 @@ Dentro de la aplicación, `?` muestra la lista de teclas.
 
 Las listas largas cargan 100 issues y piden la página siguiente al llegar al final; el encabezado
 muestra "100 de 340". Si la terminal es angosta, la tabla oculta primero la columna Proyecto,
-después Tracker y por último Prioridad.
+después Tracker y por último Prioridad. En "asignados a mí" no se muestra la columna Asignado,
+porque repetiría tu nombre en cada fila; vuelve mientras haya una fila desplegada. Un nombre de
+proyecto largo del tipo "Padre - Hijo" muestra su última parte. Recargar deja el cursor en el mismo
+issue.
+
+Desplegar una fila muestra todo su subárbol, a cualquier profundidad y en cualquier estado, con las
+mismas columnas. La vista previa muestra el porcentaje hecho, el vencimiento (rojo si está vencido,
+ámbar si vence en dos días o menos) y cuántas hijas están cerradas.
 
 ### Teclas: detalle del issue
 
@@ -164,6 +172,9 @@ después Tracker y por último Prioridad.
 | `tab` `shift+tab` `←` `→` | cambiar de pestaña (Detalle, Historial, Hijas, Relaciones) |
 | `↑` `↓` `j` `k`, `pgup` `pgdown`, `home`, `G` | desplazarse o moverse en las listas |
 | `enter` | abrir la hija o relación elegida |
+
+La pestaña Hijas dibuja todo el árbol bajo el issue, nietas incluidas, con estado, prioridad,
+tracker y asignado; Relaciones muestra el asunto y el estado del otro issue.
 | `S` | cambiar el estado (solo los que permite el flujo de trabajo), con una nota opcional |
 | `c` | cierre rápido: un estado cerrado, porcentaje hecho 100, nota opcional |
 | `n` | agregar una nota (`$EDITOR`, o un área de texto de la aplicación si no hay editor) |
@@ -235,6 +246,9 @@ Comportamiento que depende de la versión y de los permisos:
 - **El porcentaje hecho** lo ignora Redmine cuando la instancia lo calcula a partir del estado.
 - El panel de vista previa usa la descripción que ya trae la lista; no hace ninguna consulta
   adicional.
+- Las hijas cuestan lecturas, nunca escrituras: un `GET /issues.json?parent_id=…` por página de la
+  lista para las marcas `+n`, un `parent_id=~id` por fila desplegada y, en el detalle, uno para el
+  árbol y un `issue_id=…` para las relaciones. Las hijas que la key no puede ver no se cuentan.
 - La búsqueda se limita a los primeros 500 resultados.
 
 ## Preguntas frecuentes y problemas comunes

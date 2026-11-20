@@ -266,6 +266,7 @@ func TestListColumnsByWidth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := loadedList(t, tt.width, 30)
+			m.list.f = filters{status: redmine.StatusOpen} // not "assigned to me", which hides the assignee
 			out := ansi.Strip(m.render())
 			header := strings.Split(out, "\n")[3]
 			for _, s := range tt.shown {

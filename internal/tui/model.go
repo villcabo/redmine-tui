@@ -212,6 +212,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case issuesMsg:
 		if err := m.list.apply(msg); err != nil {
 			m.warn(friendlyError(m.env(), err))
+			return m, nil
+		}
+		return m, m.listFollowUps(msg)
+
+	case childrenMsg:
+		if err := m.list.applyChildren(msg); err != nil {
+			m.warn(m.tr.T("error.children", friendlyError(m.env(), err)))
+		}
+		return m, nil
+
+	case subtreeMsg:
+		if err := m.list.applySubtree(msg); err != nil {
+			m.warn(m.tr.T("error.children", friendlyError(m.env(), err)))
+		}
+		return m, nil
+
+	case descendantsMsg:
+		for _, d := range m.stack {
+			if d.uid == msg.uid {
+				d.applyDescendants(msg, m.env())
+			}
+		}
+		return m, nil
+
+	case relatedMsg:
+		for _, d := range m.stack {
+			if d.uid == msg.uid {
+				d.applyRelated(msg, m.env())
+			}
 		}
 		return m, nil
 
@@ -222,12 +251,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case issueMsg:
+		var cmds []tea.Cmd
 		for _, d := range m.stack {
 			if d.uid == msg.uid {
 				d.apply(msg, m.env())
+				if msg.err == nil {
+					cmds = append(cmds, d.followUps(m.api)...)
+				}
 			}
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case awaitMsg:
 		if msg.token != m.awaitToken {
@@ -416,11 +449,38 @@ func (m *Model) handleListKey(key string) tea.Cmd {
 		m.list.showPreview = !m.list.showPreview
 	case "N":
 		return m.openForm()
+	case "right", "l", "left", "h", "space":
+		expand := key == "right" || key == "l"
+		if key == "space" {
+			is := m.list.selected()
+			expand = is != nil && !m.list.expanded[is.ID]
+		}
+		if id := m.list.toggle(expand); id > 0 {
+			return fetchSubtreeCmd(m.api, id)
+		}
 	default:
 		m.list.move(key, m.env())
 		return m.maybeLoadMore()
 	}
 	return nil
+}
+
+// listFollowUps asks for the children of the issues a page brought and, after a fresh
+// first page, refreshes the subtrees that are still expanded.
+func (m *Model) listFollowUps(msg issuesMsg) tea.Cmd {
+	if msg.gen != m.list.gen || msg.err != nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	if ids := m.list.pageIDs(msg.offset); len(ids) > 0 {
+		cmds = append(cmds, fetchChildrenCmd(m.api, msg.gen, ids))
+	}
+	if msg.offset == 0 {
+		for _, id := range m.list.expandedIDs() {
+			cmds = append(cmds, fetchSubtreeCmd(m.api, id))
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) maybeLoadMore() tea.Cmd {
@@ -752,6 +812,7 @@ func (m *Model) helpView(e env) string {
 		{"a", "help.row.all"},
 		{"p", "help.row.preview"},
 		{"y", "help.row.copy"},
+		{"→ ← / space", "help.row.expand"},
 		{"tab / ← →", "help.row.tabs"},
 		{"o", "help.row.browser"},
 		{"r", "help.row.reload"},

@@ -37,6 +37,13 @@ type detailModel struct {
 	childCur  int
 	relCur    int
 	laidOutAt env
+
+	// tree replaces issue.Children once the descendants arrive with their full fields.
+	tree       []treeRow
+	treeLoaded bool
+	treeErr    error
+	// related holds the far side of each relation, by id, once it arrives.
+	related map[int]redmine.Issue
 }
 
 func newDetailModel(uid, id int) *detailModel {
@@ -51,9 +58,57 @@ func (d *detailModel) apply(msg issueMsg, e env) {
 	}
 	d.err = nil
 	d.issue = msg.issue
-	d.childCur = min(d.childCur, max(0, len(d.issue.Children)-1))
+	d.childCur = min(d.childCur, max(0, d.childCount()-1))
 	d.relCur = min(d.relCur, max(0, len(d.issue.Relations)-1))
 	d.relayout(e)
+}
+
+// followUps fetches what the issue alone does not carry: the status, priority and
+// assignee of its descendants and of its related issues.
+func (d *detailModel) followUps(a API) []tea.Cmd {
+	var cmds []tea.Cmd
+	if len(d.issue.Children) > 0 {
+		cmds = append(cmds, fetchDescendantsCmd(a, d.uid, d.issue.ID))
+	}
+	if len(d.issue.Relations) > 0 {
+		ids := make([]int, len(d.issue.Relations))
+		for i, r := range d.issue.Relations {
+			ids[i] = r.Other(d.issue.ID)
+		}
+		cmds = append(cmds, fetchRelatedCmd(a, d.uid, ids))
+	}
+	return cmds
+}
+
+func (d *detailModel) applyDescendants(msg descendantsMsg, e env) {
+	if d.issue == nil {
+		return
+	}
+	d.treeErr = msg.err
+	if msg.err == nil {
+		d.tree, d.treeLoaded = buildTree(d.issue.ID, msg.issues), true
+		d.childCur = min(d.childCur, max(0, d.childCount()-1))
+	}
+	d.relayout(e)
+}
+
+func (d *detailModel) applyRelated(msg relatedMsg, e env) {
+	if msg.err != nil {
+		return
+	}
+	d.related = make(map[int]redmine.Issue, len(msg.issues))
+	for _, is := range msg.issues {
+		d.related[is.ID] = is
+	}
+	d.relayout(e)
+}
+
+// childCount is the number of rows on the children tab.
+func (d *detailModel) childCount() int {
+	if d.treeLoaded {
+		return len(d.tree)
+	}
+	return len(d.issue.Children)
 }
 
 // selectedIssueID returns the issue under the cursor on the children and relations tabs.
@@ -63,7 +118,10 @@ func (d *detailModel) selectedIssueID() int {
 	}
 	switch d.tab {
 	case tabChildren:
-		if d.childCur < len(d.issue.Children) {
+		if d.treeLoaded && d.childCur < len(d.tree) {
+			return d.tree[d.childCur].issue.ID
+		}
+		if !d.treeLoaded && d.childCur < len(d.issue.Children) {
 			return d.issue.Children[d.childCur].ID
 		}
 	case tabRelations:
@@ -119,7 +177,7 @@ func (d *detailModel) moveCursor(up bool) bool {
 	}
 	switch d.tab {
 	case tabChildren:
-		d.childCur = max(0, min(d.childCur+delta, len(d.issue.Children)-1))
+		d.childCur = max(0, min(d.childCur+delta, d.childCount()-1))
 		return true
 	case tabRelations:
 		d.relCur = max(0, min(d.relCur+delta, len(d.issue.Relations)-1))
@@ -130,7 +188,7 @@ func (d *detailModel) moveCursor(up bool) bool {
 
 func (d *detailModel) cursorLine() int {
 	if d.tab == tabChildren {
-		return d.childCur
+		return d.childCur + d.childHeaderLines()
 	}
 	return d.relCur
 }
@@ -221,11 +279,13 @@ func (d *detailModel) renderOverview(e env) string {
 	if is.Parent != nil {
 		parent = fmt.Sprintf("#%d", is.Parent.ID)
 	}
+	period := st.dim.Render(padRight(e.t("detail.period"), 12)) + st.text.Render(e.tr.Date(is.StartDate)+" → ") +
+		dueStyle(e, *is).Render(e.tr.Date(is.DueDate))
 	ficha := []string{
 		field(e.t("detail.project"), is.Project.Name),
 		field(e.t("detail.assigned"), assignee),
 		field(e.t("detail.author"), is.Author.Name+" · "+e.tr.DateTime(is.CreatedOn)),
-		field(e.t("detail.period"), e.tr.Date(is.StartDate)+" → "+e.tr.Date(is.DueDate)),
+		period,
 		field(e.t("detail.parent"), parent),
 	}
 	var clasif []string
@@ -304,25 +364,69 @@ func (d *detailModel) renderChildren(e env) string {
 	if len(d.issue.Children) == 0 {
 		return " " + e.st.dim.Render(e.t("children.empty"))
 	}
-	rows := make([]string, len(d.issue.Children))
-	for i, c := range d.issue.Children {
-		label := e.st.accent.Render(fmt.Sprintf("#%d", c.ID)) + " " + e.st.dim.Render(c.Tracker.Name) + " " + c.Subject
-		rows[i] = d.row(e, i == d.childCur, label)
+	var head []string
+	if d.treeErr != nil {
+		head = append(head, " "+e.st.danger.Render(truncate(e.t("children.tree_error", friendlyError(e, d.treeErr)), e.w-2)))
 	}
-	return strings.Join(rows, "\n")
+	if !d.treeLoaded {
+		rows := make([]string, len(d.issue.Children))
+		for i, c := range d.issue.Children {
+			label := e.st.accent.Render(fmt.Sprintf("#%d", c.ID)) + " " + e.st.dim.Render(c.Tracker.Name) + " " + c.Subject
+			rows[i] = d.row(e, i == d.childCur, label)
+		}
+		return strings.Join(append(head, rows...), "\n")
+	}
+	issues := make([]redmine.Issue, len(d.tree))
+	for i, r := range d.tree {
+		issues[i] = r.issue
+	}
+	head = append(head, " "+e.st.dim.Render(e.t("children.summary", len(d.issue.Children), len(d.tree), closedCount(e, issues))))
+	t := measureIssues(e, issues, 0)
+	rows := make([]string, len(d.tree))
+	for i, r := range d.tree {
+		rows[i] = t.row(e, r.issue, "", r.prefix, i == d.childCur, e.w-1)
+	}
+	return strings.Join(append(head, rows...), "\n")
+}
+
+// childHeaderLines is how many lines sit above the first child row.
+func (d *detailModel) childHeaderLines() int {
+	n := 0
+	if d.treeErr != nil {
+		n++
+	}
+	if d.treeLoaded && len(d.issue.Children) > 0 {
+		n++
+	}
+	return n
 }
 
 func (d *detailModel) renderRelations(e env) string {
 	if len(d.issue.Relations) == 0 {
 		return " " + e.st.dim.Render(e.t("relations.empty"))
 	}
-	rows := make([]string, len(d.issue.Relations))
+	kinds := make([]string, len(d.issue.Relations))
+	lead := 0
+	var known []redmine.Issue
 	for i, r := range d.issue.Relations {
 		kind := e.t("rel." + r.RelationType)
 		if kind == "rel."+r.RelationType {
 			kind = r.RelationType
 		}
-		label := e.st.dim.Render(kind) + " " + e.st.accent.Render(fmt.Sprintf("#%d", r.Other(d.issue.ID)))
+		kinds[i] = kind
+		lead = max(lead, lipgloss.Width(kind))
+		if is, ok := d.related[r.Other(d.issue.ID)]; ok {
+			known = append(known, is)
+		}
+	}
+	t := measureIssues(e, known, lead)
+	rows := make([]string, len(d.issue.Relations))
+	for i, r := range d.issue.Relations {
+		if is, ok := d.related[r.Other(d.issue.ID)]; ok {
+			rows[i] = t.row(e, is, kinds[i], "", i == d.relCur, e.w-1)
+			continue
+		}
+		label := e.st.dim.Render(padRight(kinds[i], lead)) + " " + e.st.accent.Render(fmt.Sprintf("#%d", r.Other(d.issue.ID)))
 		rows[i] = d.row(e, i == d.relCur, label)
 	}
 	return strings.Join(rows, "\n")
