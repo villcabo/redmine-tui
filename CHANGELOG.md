@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-21
 
 ### Added
 
@@ -33,10 +33,13 @@ All notable changes to this project are documented here. The format follows
 
 - Reloading the list, or saving a change, keeps the cursor on the same issue instead of
   jumping to the first row.
-- "Assigned to me" leaves out the Assignee column; a long "Parent - Child" project name
-  shows its last part.
-- `o` opens the browser with `open` on macOS and `rundll32` on Windows, not only
-  `xdg-open`, and confirms it did.
+- "Assigned to me" leaves out the Assignee column, which returns while a row is
+  expanded; a long "Parent - Child" project name shows its last part.
+
+### Fixed
+
+- `o` opens the browser on macOS (`open`) and Windows (`rundll32`); it ran `xdg-open`
+  everywhere. It now confirms the page was opened.
 
 ## [1.0.0] - 2026-11-17
 
@@ -90,4 +93,5 @@ First public release.
   `DELETE` and no request to users, projects or custom fields other than reads.
 - A write that times out or fails on the network is never retried.
 
+[1.1.0]: https://github.com/villcabo/redmine-tui/releases/tag/v1.1.0
 [1.0.0]: https://github.com/villcabo/redmine-tui/releases/tag/v1.0.0
