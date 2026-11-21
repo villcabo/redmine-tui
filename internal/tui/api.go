@@ -20,6 +20,9 @@ const (
 type API interface {
 	ListIssues(ctx context.Context, q redmine.ListQuery, offset int) (redmine.IssuePage, error)
 	GetIssue(ctx context.Context, id int) (*redmine.Issue, error)
+	ListChildren(ctx context.Context, parentIDs []int) ([]redmine.Issue, error)
+	ListDescendants(ctx context.Context, rootID int) ([]redmine.Issue, error)
+	ListIssuesByID(ctx context.Context, ids []int) ([]redmine.Issue, error)
 	ListStatuses(ctx context.Context) ([]redmine.Status, error)
 	ListPriorities(ctx context.Context) ([]redmine.Priority, error)
 	ListTrackers(ctx context.Context) ([]redmine.IDName, error)
@@ -60,6 +63,31 @@ type (
 		uid   int
 		issue *redmine.Issue
 		err   error
+	}
+	// childrenMsg carries the direct children of the list issues in parents.
+	childrenMsg struct {
+		gen     int
+		parents []int
+		issues  []redmine.Issue
+		err     error
+	}
+	// subtreeMsg carries every issue below root, for a row expanded in the list.
+	subtreeMsg struct {
+		root   int
+		issues []redmine.Issue
+		err    error
+	}
+	// descendantsMsg carries the tree under the issue of detail uid.
+	descendantsMsg struct {
+		uid    int
+		issues []redmine.Issue
+		err    error
+	}
+	// relatedMsg carries the issues on the far side of the relations of detail uid.
+	relatedMsg struct {
+		uid    int
+		issues []redmine.Issue
+		err    error
 	}
 	searchMsg struct {
 		gen     int
@@ -149,5 +177,41 @@ func searchCmd(a API, gen int, text string) tea.Cmd {
 		defer cancel()
 		res, err := a.SearchIssues(ctx, text)
 		return searchMsg{gen: gen, results: res, err: err}
+	}
+}
+
+func fetchChildrenCmd(a API, gen int, parents []int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		issues, err := a.ListChildren(ctx, parents)
+		return childrenMsg{gen: gen, parents: parents, issues: issues, err: err}
+	}
+}
+
+func fetchSubtreeCmd(a API, root int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		issues, err := a.ListDescendants(ctx, root)
+		return subtreeMsg{root: root, issues: issues, err: err}
+	}
+}
+
+func fetchDescendantsCmd(a API, uid, id int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		issues, err := a.ListDescendants(ctx, id)
+		return descendantsMsg{uid: uid, issues: issues, err: err}
+	}
+}
+
+func fetchRelatedCmd(a API, uid int, ids []int) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+		defer cancel()
+		issues, err := a.ListIssuesByID(ctx, ids)
+		return relatedMsg{uid: uid, issues: issues, err: err}
 	}
 }

@@ -135,6 +135,48 @@ func (c *Client) ListIssues(ctx context.Context, q ListQuery, offset int) (Issue
 	return IssuePage{Issues: out.Issues, Total: out.TotalCount}, nil
 }
 
+// ListChildren returns the direct children of every issue in parentIDs, in any status.
+// Each child's Parent tells which of them it belongs to.
+func (c *Client) ListChildren(ctx context.Context, parentIDs []int) ([]Issue, error) {
+	return c.listIssueSet(ctx, "parent_id", joinIDs(parentIDs))
+}
+
+// ListDescendants returns every issue below rootID, at any depth and in any status.
+// Each one's Parent links it into the tree.
+func (c *Client) ListDescendants(ctx context.Context, rootID int) ([]Issue, error) {
+	return c.listIssueSet(ctx, "parent_id", "~"+strconv.Itoa(rootID))
+}
+
+// ListIssuesByID returns the issues in ids that the key can see, in any status.
+func (c *Client) ListIssuesByID(ctx context.Context, ids []int) ([]Issue, error) {
+	return c.listIssueSet(ctx, "issue_id", joinIDs(ids))
+}
+
+func (c *Client) listIssueSet(ctx context.Context, param, value string) ([]Issue, error) {
+	if value == "" || value == "~0" {
+		return nil, nil
+	}
+	q := url.Values{}
+	q.Set(param, value)
+	q.Set("status_id", StatusAny)
+	q.Set("sort", "id")
+	issues, err := fetchAll[Issue](ctx, c, "/issues.json", "issues", q, maxPages)
+	if err != nil {
+		return nil, i18n.Wrap(err, "err.list_issues")
+	}
+	return issues, nil
+}
+
+func joinIDs(ids []int) string {
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			parts = append(parts, strconv.Itoa(id))
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
 // ListUsers searches users by name through /users.json. Redmine serves it only to
 // administrators, so other keys get a 403 (*APIError).
 func (c *Client) ListUsers(ctx context.Context, name string) ([]Member, error) {

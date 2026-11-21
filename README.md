@@ -145,6 +145,7 @@ Press `?` inside the app for the list of keys.
 | `/` | quick text filter over the loaded rows (`esc` clears it) |
 | `p` | toggle the preview panel (shown from 140 columns) |
 | `y` | copy: link, `#id`, title, `#id title` |
+| `→` `l` / `←` `h` / `space` | expand / collapse the children of the row: `+3` marks an issue with 3 children, `−3` an expanded one |
 | `N` | new issue |
 | `o` | open in the browser |
 | `r` | reload |
@@ -153,7 +154,13 @@ Press `?` inside the app for the list of keys.
 
 Long lists load 100 issues at a time and fetch the next page when you reach the end; the header
 shows "100 of 340". When the terminal is narrow the table hides the Project column first, then
-Tracker, then Priority.
+Tracker, then Priority. In "assigned to me" the Assignee column is left out, since it would repeat
+your name on every row; it comes back while a row is expanded. A long "Parent - Child" project name
+shows its last part. Reloading keeps the cursor on the same issue.
+
+Expanding a row shows its whole subtree, at any depth and in any status, with the same columns.
+The preview shows percent done, the due date (red when overdue, amber within two days) and how
+many children are closed.
 
 ### Keys: issue detail
 
@@ -162,6 +169,9 @@ Tracker, then Priority.
 | `tab` `shift+tab` `←` `→` | switch tab (Overview, History, Children, Relations) |
 | `↑` `↓` `j` `k`, `pgup` `pgdown`, `home`, `G` | scroll or move in the lists |
 | `enter` | open the selected child or relation |
+
+The Children tab draws the whole tree below the issue, grandchildren included, with status,
+priority, tracker and assignee; Relations shows the subject and status of the other issue.
 | `S` | change status (only the statuses the workflow allows), with an optional note |
 | `c` | quick close: a closed status, percent done 100, optional note |
 | `n` | add a note (`$EDITOR`, or an in-app text area if there is no editor) |
@@ -228,6 +238,9 @@ Version and permission dependent behavior:
   to groups, because the API does not say whether it does.
 - **Percent done** is ignored by Redmine when the instance derives it from the status.
 - The preview panel uses the description already returned by the list; it makes no extra request.
+- Children cost reads, never writes: one `GET /issues.json?parent_id=…` per list page for the
+  `+n` marks, one `parent_id=~id` per expanded row, and in the detail one for the tree and one
+  `issue_id=…` for the relations. Children the key cannot see are not counted.
 - Search is limited to the first 500 results.
 
 ## FAQ and troubleshooting

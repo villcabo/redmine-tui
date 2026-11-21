@@ -18,6 +18,7 @@ const (
 	previewWidth    = 46
 	minSubjectWidth = 24
 	loadMoreMargin  = 3
+	projectWidth    = 18
 )
 
 // listModel is the issue table: filters, paging, quick text filter and preview.
@@ -25,7 +26,14 @@ type listModel struct {
 	f       filters
 	issues  []redmine.Issue
 	total   int
-	visible []int
+	visible []listRow
+
+	// kids holds the direct children of each loaded issue, asked once per page.
+	kids map[int][]redmine.Issue
+	// expanded marks the issues whose subtree is shown below them; subtrees holds that
+	// subtree once fetched, until then the direct children stand in.
+	expanded map[int]bool
+	subtrees map[int][]redmine.Issue
 
 	loading     bool
 	loadingMore bool
@@ -44,6 +52,15 @@ type listModel struct {
 	preview     previewCache
 }
 
+// listRow is one line of the table: a loaded issue, or a descendant shown under an
+// expanded one.
+type listRow struct {
+	issue  *redmine.Issue
+	child  bool
+	root   int
+	prefix string
+}
+
 type previewCache struct {
 	key  string
 	text string
@@ -52,7 +69,10 @@ type previewCache struct {
 func newListModel() listModel {
 	in := textinput.New()
 	in.Prompt = "/ "
-	return listModel{f: defaultFilters(), input: in, showPreview: true}
+	return listModel{
+		f: defaultFilters(), input: in, showPreview: true,
+		kids: map[int][]redmine.Issue{}, expanded: map[int]bool{}, subtrees: map[int][]redmine.Issue{},
+	}
 }
 
 // startLoad begins a fresh load of the first page and returns its generation.
@@ -97,21 +117,158 @@ func (l *listModel) apply(msg issuesMsg) error {
 	l.loaded = true
 	l.issues = msg.page.Issues
 	l.total = msg.page.Total
-	l.cursor, l.top = 0, 0
 	l.refilter()
 	return nil
 }
 
-func (l *listModel) refilter() {
-	q := lower(l.query)
-	l.visible = l.visible[:0]
-	for i, is := range l.issues {
-		if q == "" || matches(is, q) {
-			l.visible = append(l.visible, i)
+// pageIDs returns the ids of the issues that arrived with a page starting at offset.
+func (l *listModel) pageIDs(offset int) []int {
+	if offset >= len(l.issues) {
+		return nil
+	}
+	ids := make([]int, 0, len(l.issues)-offset)
+	for _, is := range l.issues[offset:] {
+		ids = append(ids, is.ID)
+	}
+	return ids
+}
+
+func (l *listModel) applyChildren(msg childrenMsg) error {
+	if msg.gen != l.gen {
+		return nil
+	}
+	if msg.err != nil {
+		return msg.err
+	}
+	for _, p := range msg.parents {
+		l.kids[p] = nil
+	}
+	for _, is := range msg.issues {
+		if is.Parent != nil {
+			l.kids[is.Parent.ID] = append(l.kids[is.Parent.ID], is)
 		}
+	}
+	l.refilter()
+	return nil
+}
+
+func (l *listModel) applySubtree(msg subtreeMsg) error {
+	if msg.err != nil {
+		delete(l.expanded, msg.root)
+		l.refilter()
+		return msg.err
+	}
+	l.subtrees[msg.root] = msg.issues
+	l.refilter()
+	return nil
+}
+
+// toggle expands or collapses the row under the cursor and returns the id whose subtree
+// must be fetched, if any. On a descendant row, collapse folds its root and moves there.
+func (l *listModel) toggle(expand bool) (fetch int) {
+	if l.cursor < 0 || l.cursor >= len(l.visible) {
+		return 0
+	}
+	r := l.visible[l.cursor]
+	if r.child {
+		if !expand {
+			delete(l.expanded, r.root)
+			l.rebuild()
+			l.selectRow(r.root, false)
+			l.top = min(l.top, l.cursor)
+		}
+		return 0
+	}
+	id := r.issue.ID
+	if !expand {
+		delete(l.expanded, id)
+		l.refilter()
+		return 0
+	}
+	if len(l.kids[id]) == 0 || l.expanded[id] {
+		return 0
+	}
+	l.expanded[id] = true
+	l.refilter()
+	if _, ok := l.subtrees[id]; ok {
+		return 0
+	}
+	return id
+}
+
+// expandedIDs lists the expanded issues that are still loaded, to refresh their subtrees.
+func (l *listModel) expandedIDs() []int {
+	var ids []int
+	for _, is := range l.issues {
+		if l.expanded[is.ID] {
+			ids = append(ids, is.ID)
+		}
+	}
+	return ids
+}
+
+// refilter rebuilds the visible rows and keeps the cursor on the same issue when it is
+// still there, so reloads and expansions do not jump back to the top.
+func (l *listModel) refilter() {
+	keep, keepChild := 0, false
+	if r, ok := l.row(l.cursor); ok {
+		keep, keepChild = r.issue.ID, r.child
+	}
+	l.rebuild()
+	if keep != 0 {
+		l.selectRow(keep, keepChild)
 	}
 	l.cursor = max(0, min(l.cursor, len(l.visible)-1))
 	l.top = min(l.top, l.cursor)
+}
+
+func (l *listModel) rebuild() {
+	q := lower(l.query)
+	l.visible = l.visible[:0]
+	for i := range l.issues {
+		is := &l.issues[i]
+		if q != "" && !matches(*is, q) {
+			continue
+		}
+		l.visible = append(l.visible, listRow{issue: is})
+		if !l.expanded[is.ID] {
+			continue
+		}
+		sub, ok := l.subtrees[is.ID]
+		if !ok {
+			sub = l.kids[is.ID]
+		}
+		for _, tr := range buildTree(is.ID, sub) {
+			child := tr.issue
+			l.visible = append(l.visible, listRow{issue: &child, child: true, root: is.ID, prefix: tr.prefix})
+		}
+	}
+}
+
+func (l *listModel) row(pos int) (listRow, bool) {
+	if pos < 0 || pos >= len(l.visible) {
+		return listRow{}, false
+	}
+	return l.visible[pos], true
+}
+
+// selectRow puts the cursor on the row of issue id, if it is visible.
+func (l *listModel) selectRow(id int, child bool) {
+	for pos, r := range l.visible {
+		if r.issue.ID == id && r.child == child {
+			l.cursor = pos
+			return
+		}
+	}
+}
+
+func (l *listModel) hasChildRows() bool {
+	for _, r := range l.visible {
+		if r.child {
+			return true
+		}
+	}
+	return false
 }
 
 func matches(is redmine.Issue, q string) bool {
@@ -124,10 +281,10 @@ func matches(is redmine.Issue, q string) bool {
 }
 
 func (l *listModel) selected() *redmine.Issue {
-	if l.cursor < 0 || l.cursor >= len(l.visible) {
-		return nil
+	if r, ok := l.row(l.cursor); ok {
+		return r.issue
 	}
-	return &l.issues[l.visible[l.cursor]]
+	return nil
 }
 
 func (l *listModel) startFilter() tea.Cmd {
@@ -157,7 +314,7 @@ func (l *listModel) handleFilterKey(msg tea.KeyPressMsg) tea.Cmd {
 		l.input, cmd = l.input.Update(msg)
 		l.query = l.input.Value()
 		l.cursor, l.top = 0, 0
-		l.refilter()
+		l.rebuild()
 		return cmd
 	}
 	return nil
@@ -237,12 +394,22 @@ func (l *listModel) view(e env, frame string) string {
 func (l *listModel) countText(e env) string {
 	switch {
 	case lower(l.query) != "":
-		return e.t("list.count_filtered", len(l.visible), len(l.issues))
+		return e.t("list.count_filtered", l.topLevelVisible(), len(l.issues))
 	case l.loaded && len(l.issues) < l.total:
 		return e.t("list.count_partial", len(l.issues), l.total)
 	default:
 		return fmt.Sprintf("%d", len(l.issues))
 	}
+}
+
+func (l *listModel) topLevelVisible() int {
+	n := 0
+	for _, r := range l.visible {
+		if !r.child {
+			n++
+		}
+	}
+	return n
 }
 
 func (l *listModel) titleLine(e env) string {
@@ -346,8 +513,8 @@ func (l *listModel) layout(e env, inner int) tableLayout {
 	w := map[column]int{
 		colID: 3, colStatus: 6, colPriority: 8, colTracker: 7, colAssignee: 8, colProject: 7, colUpdated: 6,
 	}
-	for _, i := range l.visible {
-		is := l.issues[i]
+	for _, r := range l.visible {
+		is := *r.issue
 		w[colID] = max(w[colID], len(fmt.Sprintf("#%d", is.ID)))
 		w[colStatus] = max(w[colStatus], min(lipgloss.Width(is.Status.Name)+2, 16))
 		w[colPriority] = max(w[colPriority], min(lipgloss.Width(is.Priority.Name)+2, 11))
@@ -355,10 +522,13 @@ func (l *listModel) layout(e env, inner int) tableLayout {
 		if is.AssignedTo != nil {
 			w[colAssignee] = max(w[colAssignee], min(lipgloss.Width(is.AssignedTo.Name), 18))
 		}
-		w[colProject] = max(w[colProject], min(lipgloss.Width(is.Project.Name), 18))
+		w[colProject] = max(w[colProject], min(lipgloss.Width(projectLabel(is.Project.Name, projectWidth)), projectWidth))
 		w[colUpdated] = max(w[colUpdated], min(lipgloss.Width(relativeTime(e.tr, e.now, is.UpdatedOn)), 12))
 	}
 	order := []column{colID, colStatus, colPriority, colTracker, colSubject, colAssignee, colProject, colUpdated}
+	if l.f.assigned.id == "me" && !l.hasChildRows() {
+		order = slices.DeleteFunc(order, func(c column) bool { return c == colAssignee })
+	}
 	hidden := 0
 	for {
 		used := 2 // cursor marker
@@ -426,7 +596,7 @@ func (l *listModel) rowsView(e env, inner, rows int) string {
 
 	lines := []string{l.headerRow(e, lay, inner)}
 	for pos := l.top; pos < end; pos++ {
-		lines = append(lines, l.row(e, lay, l.issues[l.visible[pos]], pos == l.cursor, inner))
+		lines = append(lines, l.renderRow(e, lay, l.visible[pos], pos == l.cursor, inner))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -465,7 +635,8 @@ func (p painter) space(n int) string {
 	return p.style(lipgloss.NewStyle()).Render(strings.Repeat(" ", max(0, n)))
 }
 
-func (l *listModel) row(e env, lay tableLayout, is redmine.Issue, selected bool, inner int) string {
+func (l *listModel) renderRow(e env, lay tableLayout, r listRow, selected bool, inner int) string {
+	is := *r.issue
 	p := painter{}
 	if selected {
 		p.bg = e.st.rowBg
@@ -484,24 +655,19 @@ func (l *listModel) row(e env, lay tableLayout, is redmine.Issue, selected bool,
 		case colID:
 			cell = p.text(e.st.accent, fmt.Sprintf("#%d", is.ID), w)
 		case colStatus:
-			name := truncate(is.Status.Name, w-2)
-			badge := e.st.badge(e.statusTone(is.Status), name)
-			cell = badge + p.space(w-lipgloss.Width(badge))
+			cell = statusCell(e, p, is.Status, w)
 		case colPriority:
-			cell = p.style(e.st.dots[e.priorityTone(is.Priority)]).Render("●") +
-				p.text(e.st.text, " "+is.Priority.Name, w-1)
+			cell = priorityCell(e, p, is.Priority, w)
 		case colTracker:
 			cell = p.text(e.st.dim, is.Tracker.Name, w)
 		case colSubject:
-			cell = p.text(subjectStyle, is.Subject, w)
+			lead, leadStyle := l.subjectLead(r)
+			lw := min(lipgloss.Width(lead), w)
+			cell = p.text(leadStyle(e), lead, lw) + p.text(subjectStyle, is.Subject, w-lw)
 		case colAssignee:
-			name, style := "-", e.st.dim
-			if is.AssignedTo != nil {
-				name, style = is.AssignedTo.Name, e.st.text
-			}
-			cell = p.text(style, name, w)
+			cell = assigneeCell(e, p, is, w)
 		case colProject:
-			cell = p.text(e.st.dim, is.Project.Name, w)
+			cell = p.text(e.st.dim, projectLabel(is.Project.Name, projectWidth), w)
 		case colUpdated:
 			cell = p.text(e.st.dim, relativeTime(e.tr, e.now, is.UpdatedOn), w)
 		}
@@ -517,6 +683,23 @@ func (l *listModel) row(e env, lay tableLayout, is redmine.Issue, selected bool,
 	return truncate(line, inner)
 }
 
+// subjectLead is what goes before the subject: the tree glyphs of a descendant, or
+// "+n" / "−n" on an issue with n children, collapsed or expanded.
+func (l *listModel) subjectLead(r listRow) (string, func(env) lipgloss.Style) {
+	if r.child {
+		return r.prefix, func(e env) lipgloss.Style { return e.st.dim }
+	}
+	n := len(l.kids[r.issue.ID])
+	if n == 0 {
+		return "", func(e env) lipgloss.Style { return e.st.text }
+	}
+	sign := "+"
+	if l.expanded[r.issue.ID] {
+		sign = "−"
+	}
+	return fmt.Sprintf("%s%d ", sign, n), func(e env) lipgloss.Style { return e.st.accent.Bold(true) }
+}
+
 // ---- preview ----------------------------------------------------------
 
 func (l *listModel) previewBox(e env) string {
@@ -528,7 +711,7 @@ func (l *listModel) previewBox(e env) string {
 	}
 	st := e.st
 	field := func(label, value string) string {
-		return truncate(st.dim.Render(padRight(label, 10))+st.text.Render(value), inner)
+		return truncate(st.dim.Render(padRight(label, 12))+st.text.Render(value), inner)
 	}
 	assignee := e.t("detail.unassigned")
 	if is.AssignedTo != nil {
@@ -539,12 +722,16 @@ func (l *listModel) previewBox(e env) string {
 		st.boxTitle.Render(e.t("preview.title")),
 		head,
 		st.badge(e.statusTone(is.Status), is.Status.Name) + " " + st.badge(e.priorityTone(is.Priority), is.Priority.Name),
+		truncate(st.dim.Render(padRight(e.t("preview.done"), 12))+st.progressBar(is.DoneRatio, 16), inner),
 		field(e.t("detail.assigned"), assignee),
 		field(e.t("detail.author"), is.Author.Name),
 		field(e.t("col.updated"), e.tr.DateTime(is.UpdatedOn)),
-		field(e.t("detail.due"), e.tr.Date(is.DueDate)),
-		"",
+		truncate(st.dim.Render(padRight(e.t("detail.due"), 12))+dueStyle(e, *is).Render(e.tr.Date(is.DueDate)), inner),
 	}
+	if kids := l.kids[is.ID]; len(kids) > 0 {
+		lines = append(lines, field(e.t("preview.children"), e.t("preview.children_value", closedCount(e, kids), len(kids))))
+	}
+	lines = append(lines, "")
 	room := height - 2 - lipgloss.Height(strings.Join(lines, "\n"))
 	desc := st.dim.Render(e.t("detail.no_description"))
 	if strings.TrimSpace(is.Description) != "" {

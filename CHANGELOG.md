@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Children in the list: `+n` marks an issue with n children, and `→` / `←` / `space`
+  expand and collapse its whole subtree in place, with status, priority and assignee.
+- The Children tab of the detail draws the full tree (grandchildren included) with the
+  same columns as the list, and a summary of direct, total and closed children.
+- The Relations tab shows the subject, status, priority and assignee of the other issue.
+- The preview shows percent done, a colored due date (overdue in red, due within two days
+  in amber) and how many children are closed.
+
+### Changed
+
+- Reloading the list, or saving a change, keeps the cursor on the same issue instead of
+  jumping to the first row.
+- "Assigned to me" leaves out the Assignee column; a long "Parent - Child" project name
+  shows its last part.
+
 ## [1.0.0] - 2026-11-17
 
 First public release.
