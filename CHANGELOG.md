@@ -15,6 +15,19 @@ All notable changes to this project are documented here. The format follows
 - The Relations tab shows the subject, status, priority and assignee of the other issue.
 - The preview shows percent done, a colored due date (overdue in red, due within two days
   in amber) and how many children are closed.
+- Write actions from the list: `S`, `c`, `n`, `D` and `A` act on the selected row
+  without opening it (the issue is fetched first for its workflow statuses).
+- `O` changes the order on the server: updated, due date (issues with one), priority,
+  created.
+- The detail opens at once with the list row or a cached copy, marked "updating…".
+- Version, category and estimated/spent hours in the detail when the instance reports
+  them; the version also in the preview.
+- The list header says when it was loaded, and a quick filter with no match says so
+  and how to clear it.
+- The due-date order adds a Due column, colored like the preview.
+- User custom fields show the user's name instead of the id, in the detail and its
+  history, when the key may read the field definitions; date custom fields use the
+  interface date format.
 
 ### Changed
 
@@ -22,6 +35,8 @@ All notable changes to this project are documented here. The format follows
   jumping to the first row.
 - "Assigned to me" leaves out the Assignee column; a long "Parent - Child" project name
   shows its last part.
+- `o` opens the browser with `open` on macOS and `rundll32` on Windows, not only
+  `xdg-open`, and confirms it did.
 
 ## [1.0.0] - 2026-11-17
 

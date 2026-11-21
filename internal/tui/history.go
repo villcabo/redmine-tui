@@ -16,6 +16,8 @@ type resolver struct {
 	statuses map[int]redmine.Status
 	users    map[int]string
 	fields   map[int]string
+	// value renders a custom field value for reading; nil keeps it as stored.
+	value func(fieldID int, raw string) string
 }
 
 // newResolver collects every name the issue and the status list can provide.
@@ -87,12 +89,16 @@ func (r resolver) describeAttr(d redmine.JournalDetail) string {
 
 func (r resolver) describeCustomField(d redmine.JournalDetail) string {
 	name := r.tr.T("hist.field_unknown", d.Name)
+	var mapper func(string) (string, bool)
 	if id, err := strconv.Atoi(d.Name); err == nil {
 		if n, ok := r.fields[id]; ok {
 			name = n
 		}
+		if r.value != nil {
+			mapper = func(raw string) (string, bool) { return r.value(id, raw), true }
+		}
 	}
-	return name + ": " + r.change(d, nil)
+	return name + ": " + r.change(d, mapper)
 }
 
 // change renders "old → new"; a nil mapper keeps values as they are.

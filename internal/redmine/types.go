@@ -59,26 +59,32 @@ func (c CustomField) Text() string {
 // are only filled by GetIssue. AllowedStatuses is nil when the instance does not
 // report it (Redmine before 5.0) and non-nil, possibly empty, when it does.
 type Issue struct {
-	ID           int           `json:"id"`
-	Subject      string        `json:"subject"`
-	Project      IDName        `json:"project"`
-	Tracker      IDName        `json:"tracker"`
-	Status       Status        `json:"status"`
-	Priority     IDName        `json:"priority"`
-	Author       IDName        `json:"author"`
-	AssignedTo   *IDName       `json:"assigned_to"`
-	Parent       *ParentRef    `json:"parent"`
-	StartDate    *string       `json:"start_date"`
-	DueDate      *string       `json:"due_date"`
-	DoneRatio    int           `json:"done_ratio"`
-	CreatedOn    time.Time     `json:"created_on"`
-	UpdatedOn    time.Time     `json:"updated_on"`
-	ClosedOn     *time.Time    `json:"closed_on"`
-	Description  string        `json:"description"`
-	CustomFields []CustomField `json:"custom_fields"`
-	Journals     []Journal     `json:"journals"`
-	Children     []ChildIssue  `json:"children"`
-	Relations    []Relation    `json:"relations"`
+	ID           int        `json:"id"`
+	Subject      string     `json:"subject"`
+	Project      IDName     `json:"project"`
+	Tracker      IDName     `json:"tracker"`
+	Status       Status     `json:"status"`
+	Priority     IDName     `json:"priority"`
+	Author       IDName     `json:"author"`
+	AssignedTo   *IDName    `json:"assigned_to"`
+	Parent       *ParentRef `json:"parent"`
+	StartDate    *string    `json:"start_date"`
+	DueDate      *string    `json:"due_date"`
+	DoneRatio    int        `json:"done_ratio"`
+	FixedVersion *IDName    `json:"fixed_version"`
+	Category     *IDName    `json:"category"`
+	// EstimatedHours and SpentHours are nil when the instance does not track time or
+	// nothing was recorded.
+	EstimatedHours *float64      `json:"estimated_hours"`
+	SpentHours     *float64      `json:"spent_hours"`
+	CreatedOn      time.Time     `json:"created_on"`
+	UpdatedOn      time.Time     `json:"updated_on"`
+	ClosedOn       *time.Time    `json:"closed_on"`
+	Description    string        `json:"description"`
+	CustomFields   []CustomField `json:"custom_fields"`
+	Journals       []Journal     `json:"journals"`
+	Children       []ChildIssue  `json:"children"`
+	Relations      []Relation    `json:"relations"`
 
 	AllowedStatuses []Status `json:"allowed_statuses"`
 }
@@ -213,6 +219,11 @@ type ListQuery struct {
 	ProjectID int
 	TrackerID int
 	Status    string
+	// Sort is a Redmine sort expression; empty means most recently updated first.
+	Sort string
+	// WithDueDate keeps only issues that have a due date. Sorting by due date needs it:
+	// Redmine puts the undated issues first on an ascending sort.
+	WithDueDate bool
 }
 
 // IssuePage is one page of issues and the total Redmine reports for the whole query.

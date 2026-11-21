@@ -408,8 +408,7 @@ func (m *Model) chooseProject(p *redmine.IDName) tea.Cmd {
 		}
 		r := res.(result)
 		if needDefs {
-			m.customDefsTried = true
-			m.customDefs, m.customDefsOK = r.defs, r.defsErr == nil
+			m.setCustomDefs(r.defs, r.defsErr)
 		}
 		f.project, f.info = p, r.info
 		f.assignee = nil

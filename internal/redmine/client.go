@@ -121,7 +121,14 @@ func (c *Client) ListIssues(ctx context.Context, q ListQuery, offset int) (Issue
 		status = StatusOpen
 	}
 	query.Set("status_id", status)
-	query.Set("sort", "updated_on:desc")
+	if q.WithDueDate {
+		query.Set("due_date", "*")
+	}
+	sort := q.Sort
+	if sort == "" {
+		sort = "updated_on:desc"
+	}
+	query.Set("sort", sort)
 	query.Set("limit", strconv.Itoa(pageSize))
 	query.Set("offset", strconv.Itoa(offset))
 
@@ -295,6 +302,24 @@ func (c *Client) ListMembers(ctx context.Context, projectID int) ([]Member, erro
 
 // CurrentUser returns the owner of the API key.
 func (c *Client) CurrentUser(ctx context.Context) (Member, error) {
+	m, err := c.user(ctx, "/users/current.json")
+	if err != nil {
+		return Member{}, i18n.Wrap(err, "err.current_user")
+	}
+	return m, nil
+}
+
+// GetUser returns one user by id. Any key can read the users it is allowed to see; the
+// rest answer 403 or 404 (*APIError).
+func (c *Client) GetUser(ctx context.Context, id int) (Member, error) {
+	m, err := c.user(ctx, "/users/"+strconv.Itoa(id)+".json")
+	if err != nil {
+		return Member{}, i18n.Wrap(err, "err.get_user", id)
+	}
+	return m, nil
+}
+
+func (c *Client) user(ctx context.Context, path string) (Member, error) {
 	var out struct {
 		User struct {
 			ID        int    `json:"id"`
@@ -303,8 +328,8 @@ func (c *Client) CurrentUser(ctx context.Context) (Member, error) {
 			LastName  string `json:"lastname"`
 		} `json:"user"`
 	}
-	if err := c.get(ctx, "/users/current.json", nil, &out); err != nil {
-		return Member{}, i18n.Wrap(err, "err.current_user")
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return Member{}, err
 	}
 	name := strings.TrimSpace(out.User.FirstName + " " + out.User.LastName)
 	if name == "" {

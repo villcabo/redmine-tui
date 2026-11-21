@@ -32,6 +32,24 @@ type filters struct {
 	tracker    *redmine.IDName
 	status     string // open, closed, * or a status id
 	statusName string // label of a concrete status
+	order      listOrder
+}
+
+// listOrder is how Redmine sorts the list; the zero value is most recently updated first.
+type listOrder int
+
+const (
+	orderUpdated listOrder = iota
+	orderDue
+	orderPriority
+	orderCreated
+	orderCount
+)
+
+func (o listOrder) next() listOrder { return (o + 1) % orderCount }
+
+func (o listOrder) label(e env) string {
+	return e.t([orderCount]string{"order.updated", "order.due", "order.priority", "order.created"}[o])
 }
 
 func defaultFilters() filters {
@@ -48,6 +66,14 @@ func (f filters) query() redmine.ListQuery {
 	}
 	if f.tracker != nil {
 		q.TrackerID = f.tracker.ID
+	}
+	switch f.order {
+	case orderDue:
+		q.Sort, q.WithDueDate = "due_date,priority:desc", true
+	case orderPriority:
+		q.Sort = "priority:desc,updated_on:desc"
+	case orderCreated:
+		q.Sort = "id:desc"
 	}
 	return q
 }
@@ -123,6 +149,9 @@ func (f filters) summary(e env) string {
 	}
 	if f.watched {
 		parts = append(parts, e.t("filter.watched"))
+	}
+	if f.order != orderUpdated {
+		parts = append(parts, e.t("filter.order")+": "+f.order.label(e))
 	}
 	return strings.Join(parts, " · ")
 }

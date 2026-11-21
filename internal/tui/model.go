@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/url"
 	"os/exec"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -46,8 +48,12 @@ type env struct {
 	defaultStatus int
 	statusColors  map[string]string
 	priorities    []redmine.Priority
-	now           time.Time
-	w, h          int
+	// fieldFormats maps custom field ids to their format ("user", "date", …) when the key
+	// may read the definitions; userNames resolves the ids of user custom fields.
+	fieldFormats map[int]string
+	userNames    map[int]string
+	now          time.Time
+	w, h         int
 }
 
 func (e env) t(key string, args ...any) string { return e.tr.T(key, args...) }
@@ -86,16 +92,22 @@ type Model struct {
 	usersDenied bool
 	usersCache  []redmine.Member
 
-	customDefs      []redmine.CustomFieldDef
-	customDefsOK    bool
-	customDefsTried bool
+	customDefs        []redmine.CustomFieldDef
+	customDefsOK      bool
+	customDefsTried   bool
+	customDefsPending bool
+	fieldFormats      map[int]string
+	userNames         map[int]string
 
-	list    listModel
-	search  *searchModel
-	stack   []*detailModel
-	form    *formModel
-	modal   modal
-	nextUID int
+	list listModel
+	// issueCache keeps the last full copy of each opened issue, so reopening it paints at
+	// once while the fresh copy loads.
+	issueCache map[int]*redmine.Issue
+	search     *searchModel
+	stack      []*detailModel
+	form       *formModel
+	modal      modal
+	nextUID    int
 
 	awaitToken int
 	writing    bool
@@ -110,20 +122,22 @@ func New(api API, opts Options) *Model {
 		host = u.Host
 	}
 	m := &Model{
-		api:      api,
-		baseURL:  strings.TrimRight(opts.BaseURL, "/"),
-		host:     host,
-		opts:     opts,
-		tr:       i18n.New(opts.Lang),
-		dark:     true,
-		noColor:  opts.NoColor,
-		w:        100,
-		h:        30,
-		now:      time.Now,
-		lookPath: exec.LookPath,
-		spin:     spinner.New(spinner.WithSpinner(spinner.Dot)),
-		statuses: map[int]redmine.Status{},
-		list:     newListModel(),
+		api:        api,
+		baseURL:    strings.TrimRight(opts.BaseURL, "/"),
+		host:       host,
+		opts:       opts,
+		tr:         i18n.New(opts.Lang),
+		dark:       true,
+		noColor:    opts.NoColor,
+		w:          100,
+		h:          30,
+		now:        time.Now,
+		lookPath:   exec.LookPath,
+		spin:       spinner.New(spinner.WithSpinner(spinner.Dot)),
+		statuses:   map[int]redmine.Status{},
+		list:       newListModel(),
+		issueCache: map[int]*redmine.Issue{},
+		userNames:  map[int]string{},
 	}
 	m.st = newStyles(m.dark, opts.NoColor)
 	if opts.StartID > 0 {
@@ -142,6 +156,7 @@ func (m *Model) env() env {
 		st: m.st, tr: m.tr, dark: m.dark, noColor: m.noColor,
 		statuses: m.statuses, statusList: m.statusList, defaultStatus: m.defaultStatus,
 		statusColors: m.opts.StatusColors, priorities: m.priorities, now: m.now(),
+		fieldFormats: m.fieldFormats, userNames: m.userNames,
 		w: max(m.w, minWidth), h: max(m.h, minHeight),
 	}
 }
@@ -210,6 +225,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case issuesMsg:
+		if msg.gen == m.list.gen && msg.offset == 0 && msg.err == nil {
+			m.list.loadedAt = m.now()
+		}
 		if err := m.list.apply(msg); err != nil {
 			m.warn(friendlyError(m.env(), err))
 			return m, nil
@@ -226,6 +244,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err := m.list.applySubtree(msg); err != nil {
 			m.warn(m.tr.T("error.children", friendlyError(m.env(), err)))
 		}
+		return m, nil
+
+	case customDefsMsg:
+		m.customDefsPending = false
+		m.setCustomDefs(msg.defs, msg.err)
+		var cmds []tea.Cmd
+		for _, d := range m.stack {
+			if d.issue != nil {
+				cmds = append(cmds, m.resolveCustomValues(d.issue))
+			}
+		}
+		m.refreshAll()
+		return m, tea.Batch(cmds...)
+
+	case userNamesMsg:
+		for id, name := range msg.names {
+			m.userNames[id] = name
+		}
+		m.refreshAll()
 		return m, nil
 
 	case descendantsMsg:
@@ -255,7 +292,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, d := range m.stack {
 			if d.uid == msg.uid {
 				d.apply(msg, m.env())
-				if msg.err == nil {
+				if msg.err == nil && msg.issue != nil {
+					m.issueCache[d.id] = msg.issue
+					cmds = append(cmds, m.resolveCustomValues(msg.issue))
 					cmds = append(cmds, d.followUps(m.api)...)
 				}
 			}
@@ -300,6 +339,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openedMsg:
 		if msg.err != nil {
 			m.warn(m.tr.T("error.browser", msg.err.Error()))
+		} else {
+			m.notify(m.tr.T("notice.opened", msg.id))
 		}
 		return m, nil
 
@@ -447,8 +488,16 @@ func (m *Model) handleListKey(key string) tea.Cmd {
 		return m.applyFilters(filters{status: redmine.StatusOpen})
 	case "p":
 		m.list.showPreview = !m.list.showPreview
+	case "O":
+		f := m.list.f
+		f.order = f.order.next()
+		return m.applyFilters(f)
 	case "N":
 		return m.openForm()
+	case "S", "n", "D", "A", "c":
+		if is := m.list.selected(); is != nil {
+			return m.actOnListIssue(is.ID, writeAction(key))
+		}
 	case "right", "l", "left", "h", "space":
 		expand := key == "right" || key == "l"
 		if key == "space" {
@@ -543,19 +592,44 @@ func (m *Model) handleDetailKey(d *detailModel, key string, msg tea.KeyPressMsg)
 			return m.openIssue(id)
 		}
 		return nil
-	case "S":
-		return m.startStatus(d)
-	case "n":
-		return m.startNote(d)
-	case "D":
-		return m.startDone(d)
-	case "A":
-		return m.startAssign(d)
-	case "c":
-		return m.startClose(d)
+	case "S", "n", "D", "A", "c":
+		return writeAction(key)(m, d.issue)
 	}
 	d.handleKey(key, msg, m.env())
 	return nil
+}
+
+// writeAction maps a write key to the action it starts on an issue.
+func writeAction(key string) func(*Model, *redmine.Issue) tea.Cmd {
+	switch key {
+	case "S":
+		return (*Model).startStatus
+	case "n":
+		return (*Model).startNote
+	case "D":
+		return (*Model).startDone
+	case "A":
+		return (*Model).startAssign
+	default:
+		return (*Model).startClose
+	}
+}
+
+// actOnListIssue fetches the issue before acting on it from the list: a list row lacks
+// the statuses the workflow allows, and its percent done or assignee may be stale.
+func (m *Model) actOnListIssue(id int, act func(*Model, *redmine.Issue) tea.Cmd) tea.Cmd {
+	if !m.writable() {
+		return nil
+	}
+	api := m.api
+	return m.await(m.tr.T("loading.issue", id), func(ctx context.Context) (any, error) {
+		return api.GetIssue(ctx, id)
+	}, func(m *Model, res any, err error) tea.Cmd {
+		if err != nil {
+			return m.showError(err)
+		}
+		return act(m, res.(*redmine.Issue))
+	})
 }
 
 func (m *Model) active() *detailModel {
@@ -585,9 +659,25 @@ func (m *Model) busy() bool {
 
 func (m *Model) openIssue(id int) tea.Cmd {
 	d := m.newDetail(id)
+	d.prefill(m.knownIssue(id))
 	m.stack = append(m.stack, d)
 	d.relayout(m.env())
 	return tea.Batch(fetchIssueCmd(m.api, d.uid, d.id), m.spin.Tick)
+}
+
+// knownIssue returns what is already known about an issue without asking Redmine: the
+// last full copy, or else its list row (which lacks history, children and relations).
+func (m *Model) knownIssue(id int) (is *redmine.Issue, full bool) {
+	if is, ok := m.issueCache[id]; ok {
+		return is, true
+	}
+	for _, r := range m.list.visible {
+		if r.issue.ID == id {
+			row := *r.issue
+			return &row, false
+		}
+	}
+	return nil, false
 }
 
 func (m *Model) reloadList() tea.Cmd {
@@ -605,13 +695,26 @@ func (m *Model) applyFilters(f filters) tea.Cmd {
 
 func (m *Model) openBrowser(id int) tea.Cmd {
 	target := fmt.Sprintf("%s/issues/%d", m.baseURL, id)
+	name, args := browserCommand(runtime.GOOS, target)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), browserTimeout)
 		defer cancel()
-		if err := exec.CommandContext(ctx, "xdg-open", target).Run(); err != nil {
+		if err := exec.CommandContext(ctx, name, args...).Run(); err != nil {
 			return openedMsg{err: err}
 		}
-		return openedMsg{}
+		return openedMsg{id: id}
+	}
+}
+
+// browserCommand is the program that opens a URL in the default browser on goos.
+func browserCommand(goos, target string) (string, []string) {
+	switch goos {
+	case "darwin":
+		return "open", []string{target}
+	case "windows":
+		return "rundll32", []string{"url.dll,FileProtocolHandler", target}
+	default:
+		return "xdg-open", []string{target}
 	}
 }
 
@@ -811,6 +914,7 @@ func (m *Model) helpView(e env) string {
 		{"F / ctrl+r", "help.row.clear_filters"},
 		{"a", "help.row.all"},
 		{"p", "help.row.preview"},
+		{"O", "help.row.order"},
 		{"y", "help.row.copy"},
 		{"→ ← / space", "help.row.expand"},
 		{"tab / ← →", "help.row.tabs"},
@@ -881,4 +985,58 @@ func padRight(s string, width int) string {
 		return s + strings.Repeat(" ", gap)
 	}
 	return s
+}
+
+// setCustomDefs stores the custom field definitions and the format of each field.
+func (m *Model) setCustomDefs(defs []redmine.CustomFieldDef, err error) {
+	m.customDefsTried = true
+	m.customDefs, m.customDefsOK = defs, err == nil
+	if err != nil {
+		return
+	}
+	m.fieldFormats = make(map[int]string, len(defs))
+	for _, d := range defs {
+		m.fieldFormats[d.ID] = d.FieldFormat
+	}
+}
+
+// resolveCustomValues fetches what the issue's custom values need to be readable: the
+// field definitions once, then the names of the users that user fields point at.
+func (m *Model) resolveCustomValues(is *redmine.Issue) tea.Cmd {
+	if !m.customDefsTried {
+		if m.customDefsPending {
+			return nil
+		}
+		m.customDefsPending = true
+		return fetchCustomDefsCmd(m.api)
+	}
+	var ids []int
+	want := func(raw string) {
+		for _, part := range strings.Split(raw, ", ") {
+			id, err := strconv.Atoi(strings.TrimSpace(part))
+			if _, known := m.userNames[id]; err == nil && id > 0 && !known && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	for _, cf := range is.CustomFields {
+		if m.fieldFormats[cf.ID] == "user" {
+			want(cf.Text())
+		}
+	}
+	for _, j := range is.Journals {
+		for _, det := range j.Details {
+			if id, err := strconv.Atoi(det.Name); err == nil && det.Property == "cf" && m.fieldFormats[id] == "user" {
+				want(valueOr(det.OldValue, ""))
+				want(valueOr(det.NewValue, ""))
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	for _, id := range ids {
+		m.userNames[id] = "" // asked once; a failure keeps showing the id
+	}
+	return fetchUserNamesCmd(m.api, ids)
 }

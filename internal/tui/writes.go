@@ -43,8 +43,7 @@ func (m *Model) confirmWrite(text string, issueID int, do func(ctx context.Conte
 	}}
 }
 
-func (m *Model) confirmUpdate(d *detailModel, text string, u redmine.IssueUpdate) {
-	id := d.id
+func (m *Model) confirmUpdate(id int, text string, u redmine.IssueUpdate) {
 	m.confirmWrite(text, id, func(ctx context.Context, a API) (*redmine.Issue, error) {
 		return nil, a.UpdateIssue(ctx, id, u)
 	})
@@ -69,6 +68,7 @@ func (m *Model) onWriteDone(msg writeDoneMsg) tea.Cmd {
 		return tea.Batch(cmds...)
 	}
 	m.notify(e.t("notice.updated", msg.issueID))
+	delete(m.issueCache, msg.issueID)
 	for _, d := range m.stack {
 		if d.id == msg.issueID {
 			d.loading = true
@@ -122,15 +122,15 @@ func (m *Model) statusChoices(is *redmine.Issue) (choices []redmine.Status, warn
 	return m.statusList, m.tr.T("status.no_workflow")
 }
 
-func (m *Model) startStatus(d *detailModel) tea.Cmd {
-	if !m.writable() || d.issue == nil {
+func (m *Model) startStatus(is *redmine.Issue) tea.Cmd {
+	if !m.writable() || is == nil {
 		return nil
 	}
 	e := m.env()
-	choices, warning := m.statusChoices(d.issue)
+	choices, warning := m.statusChoices(is)
 	var items []pickItem
 	for _, s := range choices {
-		if s.ID != d.issue.Status.ID {
+		if s.ID != is.Status.ID {
 			items = append(items, pickItem{label: s.Name, value: s})
 		}
 	}
@@ -138,11 +138,11 @@ func (m *Model) startStatus(d *detailModel) tea.Cmd {
 		m.warn(e.t("status.none_allowed"))
 		return nil
 	}
-	p := newPicker(e, e.t("status.pick", d.id), items, func(m *Model, it pickItem) tea.Cmd {
+	p := newPicker(e, e.t("status.pick", is.ID), items, func(m *Model, it pickItem) tea.Cmd {
 		to := it.value.(redmine.Status)
 		m.askNote(func(m *Model, note string) tea.Cmd {
-			text := withNote(m.env(), m.tr.T("confirm.status", d.id, d.issue.Status.Name, to.Name), note)
-			m.confirmUpdate(d, text, redmine.IssueUpdate{StatusID: &to.ID, Notes: note})
+			text := withNote(m.env(), m.tr.T("confirm.status", is.ID, is.Status.Name, to.Name), note)
+			m.confirmUpdate(is.ID, text, redmine.IssueUpdate{StatusID: &to.ID, Notes: note})
 			return nil
 		})
 		return nil
@@ -153,23 +153,23 @@ func (m *Model) startStatus(d *detailModel) tea.Cmd {
 }
 
 // startClose moves the issue to a closed status among the allowed ones and sets 100%.
-func (m *Model) startClose(d *detailModel) tea.Cmd {
-	if !m.writable() || d.issue == nil {
+func (m *Model) startClose(is *redmine.Issue) tea.Cmd {
+	if !m.writable() || is == nil {
 		return nil
 	}
 	e := m.env()
-	choices, warning := m.statusChoices(d.issue)
+	choices, warning := m.statusChoices(is)
 	var closed []pickItem
 	for _, s := range choices {
-		if s.IsClosed && s.ID != d.issue.Status.ID {
+		if s.IsClosed && s.ID != is.Status.ID {
 			closed = append(closed, pickItem{label: s.Name, value: s})
 		}
 	}
 	proceed := func(m *Model, to redmine.Status) tea.Cmd {
 		m.askNote(func(m *Model, note string) tea.Cmd {
 			done := 100
-			text := withNote(m.env(), m.tr.T("confirm.close", d.id, d.issue.Status.Name, to.Name, d.issue.DoneRatio), note)
-			m.confirmUpdate(d, text, redmine.IssueUpdate{StatusID: &to.ID, DoneRatio: &done, Notes: note})
+			text := withNote(m.env(), m.tr.T("confirm.close", is.ID, is.Status.Name, to.Name, is.DoneRatio), note)
+			m.confirmUpdate(is.ID, text, redmine.IssueUpdate{StatusID: &to.ID, DoneRatio: &done, Notes: note})
 			return nil
 		})
 		return nil
@@ -181,7 +181,7 @@ func (m *Model) startClose(d *detailModel) tea.Cmd {
 	case 1:
 		return proceed(m, closed[0].value.(redmine.Status))
 	}
-	p := newPicker(e, e.t("close.pick", d.id), closed, func(m *Model, it pickItem) tea.Cmd {
+	p := newPicker(e, e.t("close.pick", is.ID), closed, func(m *Model, it pickItem) tea.Cmd {
 		return proceed(m, it.value.(redmine.Status))
 	})
 	p.note = warning
@@ -191,8 +191,8 @@ func (m *Model) startClose(d *detailModel) tea.Cmd {
 
 // ---- done ratio -------------------------------------------------------
 
-func (m *Model) startDone(d *detailModel) tea.Cmd {
-	if !m.writable() || d.issue == nil {
+func (m *Model) startDone(is *redmine.Issue) tea.Cmd {
+	if !m.writable() || is == nil {
 		return nil
 	}
 	e := m.env()
@@ -200,14 +200,14 @@ func (m *Model) startDone(d *detailModel) tea.Cmd {
 	cursor := 0
 	for v := 0; v <= 100; v += 10 {
 		items = append(items, pickItem{label: strconv.Itoa(v) + "%", value: v})
-		if v <= d.issue.DoneRatio {
+		if v <= is.DoneRatio {
 			cursor = len(items) - 1
 		}
 	}
-	p := newPicker(e, e.t("done.pick", d.id), items, func(m *Model, it pickItem) tea.Cmd {
+	p := newPicker(e, e.t("done.pick", is.ID), items, func(m *Model, it pickItem) tea.Cmd {
 		to := it.value.(int)
-		text := m.tr.T("confirm.done", d.id, d.issue.DoneRatio, to)
-		m.confirmUpdate(d, text, redmine.IssueUpdate{DoneRatio: &to})
+		text := m.tr.T("confirm.done", is.ID, is.DoneRatio, to)
+		m.confirmUpdate(is.ID, text, redmine.IssueUpdate{DoneRatio: &to})
 		return nil
 	})
 	p.cursor = cursor
@@ -222,11 +222,11 @@ type assignOptions struct {
 	members []redmine.Member
 }
 
-func (m *Model) startAssign(d *detailModel) tea.Cmd {
-	if !m.writable() || d.issue == nil {
+func (m *Model) startAssign(is *redmine.Issue) tea.Cmd {
+	if !m.writable() || is == nil {
 		return nil
 	}
-	api, projectID, knownMe := m.api, d.issue.Project.ID, m.me
+	api, projectID, knownMe := m.api, is.Project.ID, m.me
 	return m.await(m.tr.T("loading.members"), func(ctx context.Context) (any, error) {
 		opts := assignOptions{me: knownMe}
 		if opts.me.ID == 0 {
@@ -258,18 +258,18 @@ func (m *Model) startAssign(d *detailModel) tea.Cmd {
 				items = append(items, pickItem{label: u.Name, value: u})
 			}
 		}
-		p := newPicker(e, e.t("assign.pick", d.id), items, func(m *Model, it pickItem) tea.Cmd {
+		p := newPicker(e, e.t("assign.pick", is.ID), items, func(m *Model, it pickItem) tea.Cmd {
 			to := it.value.(redmine.Member)
 			from := e.t("assign.unassigned")
-			if d.issue.AssignedTo != nil {
-				from = d.issue.AssignedTo.Name
+			if is.AssignedTo != nil {
+				from = is.AssignedTo.Name
 			}
 			target := e.t("assign.unassigned")
 			if to.ID != 0 {
 				target = to.Name
 			}
 			id := to.ID
-			m.confirmUpdate(d, m.tr.T("confirm.assign", d.id, from, target), redmine.IssueUpdate{AssignedToID: &id})
+			m.confirmUpdate(is.ID, m.tr.T("confirm.assign", is.ID, from, target), redmine.IssueUpdate{AssignedToID: &id})
 			return nil
 		}).withFilter(e)
 		m.modal = p
@@ -279,17 +279,17 @@ func (m *Model) startAssign(d *detailModel) tea.Cmd {
 
 // ---- notes ------------------------------------------------------------
 
-func (m *Model) startNote(d *detailModel) tea.Cmd {
-	if !m.writable() || d.issue == nil {
+func (m *Model) startNote(is *redmine.Issue) tea.Cmd {
+	if !m.writable() || is == nil {
 		return nil
 	}
-	return m.editText("", m.tr.T("note.add_title", d.id), func(m *Model, text string) tea.Cmd {
+	return m.editText("", m.tr.T("note.add_title", is.ID), func(m *Model, text string) tea.Cmd {
 		if text == "" {
 			m.warn(m.tr.T("note.empty"))
 			return nil
 		}
 		e := m.env()
-		m.confirmUpdate(d, e.t("confirm.note_add", d.id)+"\n\n"+previewLines(text, notePreviewLines), redmine.IssueUpdate{Notes: text})
+		m.confirmUpdate(is.ID, e.t("confirm.note_add", is.ID)+"\n\n"+previewLines(text, notePreviewLines), redmine.IssueUpdate{Notes: text})
 		return nil
 	})
 }

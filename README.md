@@ -144,6 +144,8 @@ Press `?` inside the app for the list of keys.
 | `a` | toggle open / all statuses |
 | `/` | quick text filter over the loaded rows (`esc` clears it) |
 | `p` | toggle the preview panel (shown from 140 columns) |
+| `O` | change the order: updated (default), due date, priority, created. Due date lists only issues that have one, because Redmine puts undated issues first, and adds a Due column |
+| `S` `c` `n` `D` `A` | status, quick close, note, percent done, assign, on the selected row, without opening it. The issue is fetched first, for its workflow statuses |
 | `y` | copy: link, `#id`, title, `#id title` |
 | `→` `l` / `←` `h` / `space` | expand / collapse the children of the row: `+3` marks an issue with 3 children, `−3` an expanded one |
 | `N` | new issue |
@@ -169,6 +171,10 @@ many children are closed.
 | `tab` `shift+tab` `←` `→` | switch tab (Overview, History, Children, Relations) |
 | `↑` `↓` `j` `k`, `pgup` `pgdown`, `home`, `G` | scroll or move in the lists |
 | `enter` | open the selected child or relation |
+
+The detail opens at once with what the list (or an earlier visit) already knows and marks itself
+"updating…" until the full issue arrives. Version, category and estimated/spent hours appear only
+when the instance reports them.
 
 The Children tab draws the whole tree below the issue, grandchildren included, with status,
 priority, tracker and assignee; Relations shows the subject and status of the other issue.
@@ -242,6 +248,9 @@ Version and permission dependent behavior:
   `+n` marks, one `parent_id=~id` per expanded row, and in the detail one for the tree and one
   `issue_id=…` for the relations. Children the key cannot see are not counted.
 - Search is limited to the first 500 results.
+- **User custom fields** come from Redmine as a user id. The detail shows the name only when the
+  key may read the field definitions (`GET /custom_fields.json`, administrator-only) and the user
+  (`GET /users/:id.json`); otherwise it shows the id. Date custom fields use the interface format.
 
 ## FAQ and troubleshooting
 

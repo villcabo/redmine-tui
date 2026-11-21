@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -30,6 +31,9 @@ type detailModel struct {
 	issue   *redmine.Issue
 	loading bool
 	err     error
+	// partial means issue is a list row shown while the full issue loads: it has no
+	// history, children or relations yet.
+	partial bool
 
 	tab       tab
 	vp        viewport.Model
@@ -50,6 +54,14 @@ func newDetailModel(uid, id int) *detailModel {
 	return &detailModel{uid: uid, id: id, loading: true, vp: viewport.New()}
 }
 
+// prefill shows what is already known about the issue while the full copy loads.
+func (d *detailModel) prefill(is *redmine.Issue, full bool) {
+	if is == nil {
+		return
+	}
+	d.issue, d.partial = is, !full
+}
+
 func (d *detailModel) apply(msg issueMsg, e env) {
 	d.loading = false
 	if msg.err != nil {
@@ -57,6 +69,7 @@ func (d *detailModel) apply(msg issueMsg, e env) {
 		return
 	}
 	d.err = nil
+	d.partial = false
 	d.issue = msg.issue
 	d.childCur = min(d.childCur, max(0, d.childCount()-1))
 	d.relCur = min(d.relCur, max(0, len(d.issue.Relations)-1))
@@ -240,6 +253,9 @@ func (d *detailModel) renderTabs(e env) string {
 		e.t("tab.children", len(d.issue.Children)),
 		e.t("tab.relations", len(d.issue.Relations)),
 	}
+	if d.partial {
+		labels[tabChildren], labels[tabRelations] = e.t("tab.children_pending"), e.t("tab.relations_pending")
+	}
 	parts := make([]string, 0, tabCount)
 	for i, l := range labels {
 		if tab(i) == d.tab {
@@ -248,10 +264,17 @@ func (d *detailModel) renderTabs(e env) string {
 			parts = append(parts, e.st.tabIdle.Render(l))
 		}
 	}
-	return " " + strings.Join(parts, e.st.dim.Render("  ·  "))
+	line := " " + strings.Join(parts, e.st.dim.Render("  ·  "))
+	if d.loading {
+		line += e.st.dim.Render("  ·  " + e.t("list.updating"))
+	}
+	return line
 }
 
 func (d *detailModel) renderBody(e env) string {
+	if d.partial && d.tab != tabOverview {
+		return " " + e.st.dim.Render(e.t("loading.issue", d.id))
+	}
 	switch d.tab {
 	case tabHistory:
 		return d.renderHistory(e)
@@ -288,9 +311,18 @@ func (d *detailModel) renderOverview(e env) string {
 		period,
 		field(e.t("detail.parent"), parent),
 	}
+	if is.FixedVersion != nil {
+		ficha = append(ficha, field(e.t("detail.version"), is.FixedVersion.Name))
+	}
+	if is.Category != nil {
+		ficha = append(ficha, field(e.t("detail.category"), is.Category.Name))
+	}
+	if hours := hoursText(e, is); hours != "" {
+		ficha = append(ficha, field(e.t("detail.hours"), hours))
+	}
 	var clasif []string
 	for _, cf := range is.CustomFields {
-		v := cf.Text()
+		v := customValue(e, cf.ID, cf.Text())
 		if v == "" {
 			continue
 		}
@@ -339,6 +371,7 @@ func pad(lines []string, n int) []string {
 
 func (d *detailModel) renderHistory(e env) string {
 	res := newResolver(e.tr, d.issue, e.statuses)
+	res.value = func(fieldID int, raw string) string { return customValue(e, fieldID, raw) }
 	var entries []string
 	for _, j := range d.issue.Journals {
 		var lines []string
@@ -446,4 +479,40 @@ func indent(s, prefix string) string {
 		lines[i] = prefix + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// hoursText renders the estimated and spent hours that the instance reports, or "".
+func hoursText(e env, is *redmine.Issue) string {
+	var parts []string
+	if is.EstimatedHours != nil {
+		parts = append(parts, e.t("detail.hours_estimated", formatHours(*is.EstimatedHours)))
+	}
+	if is.SpentHours != nil && *is.SpentHours > 0 {
+		parts = append(parts, e.t("detail.hours_spent", formatHours(*is.SpentHours)))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatHours(h float64) string {
+	return strings.TrimSuffix(strings.TrimRight(fmt.Sprintf("%.2f", h), "0"), ".")
+}
+
+// customValue renders a custom field value for reading: user ids become names and dates
+// take the interface format. Without the field definitions the value stays as stored.
+func customValue(e env, fieldID int, raw string) string {
+	switch e.fieldFormats[fieldID] {
+	case "user":
+		parts := strings.Split(raw, ", ")
+		for i, p := range parts {
+			if id, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && e.userNames[id] != "" {
+				parts[i] = e.userNames[id]
+			}
+		}
+		return strings.Join(parts, ", ")
+	case "date":
+		if raw != "" {
+			return e.tr.Date(&raw)
+		}
+	}
+	return raw
 }
