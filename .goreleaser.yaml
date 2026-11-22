@@ -49,14 +49,10 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+# Release notes list the merged pull requests with their authors, grouped by label as
+# .github/release.yml says, instead of one line per commit.
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "^ci:"
+  use: github-native
 
 release:
   draft: false
